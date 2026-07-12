@@ -50,8 +50,8 @@ se crean vistas, controladores, middleware ni pruebas con archivos vacíos.
 
 Laravel 13 requiere PHP 8.3 o superior. El Starter Kit actual también necesita
 Composer y Node 20.19 o superior. Para el flujo completo se utilizan Docker
-Engine con el plugin de Compose, `grpcurl` y `fuser`, incluido en el paquete
-`psmisc`.
+Engine con los plugins de Compose y Buildx, `grpcurl` y `fuser`, incluido en el
+paquete `psmisc`.
 
 La ruta recomendada reutiliza una imagen de Laravel Sail ya construida y solo
 añade el paquete binario `php8.5-grpc` en una capa pequeña. Como alternativa se
@@ -67,10 +67,14 @@ node --version
 npm --version
 docker --version
 docker compose version
+docker buildx version
 grpcurl --version
 fuser --version
 # ===== FIN DEL BLOQUE =====
 ```
+
+`docker buildx version` debe imprimir la versión del plugin. Si Docker responde
+`unknown command: docker buildx`, Buildx todavía no está instalado correctamente.
 
 Si `fuser` no está disponible, elegir **solo el bloque de la distribución que
 corresponda**.
