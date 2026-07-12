@@ -19,6 +19,169 @@ El gateway configurado por defecto es:
 academia-dev.eastus2.cloudapp.azure.com:50050
 ```
 
+## Crear el login desde cero con plantillas predefinidas
+
+Esta es la ruta principal solicitada. Comienza en un directorio que todavía no
+contiene un proyecto Laravel y utiliza el Starter Kit oficial de Livewire. No
+se crean vistas, controladores, middleware ni pruebas con archivos vacíos.
+
+### 1. Verificar requisitos
+
+Laravel 13 requiere PHP 8.3 o superior. El Starter Kit actual también necesita
+Composer y Node 20.19 o superior.
+
+```bash
+php --version
+composer --version
+node --version
+npm --version
+docker --version
+docker compose version
+grpcurl --version
+```
+
+Si PHP, Composer y el instalador de Laravel no están disponibles en Linux, el
+instalador oficial se obtiene con:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://php.new/install/linux/8.5)"
+exec "$SHELL" -l
+composer global require laravel/installer
+```
+
+### 2. Crear el proyecto con el Starter Kit oficial
+
+```bash
+laravel new sistema-login \
+  --livewire \
+  --phpunit \
+  --database=sqlite \
+  --npm \
+  --no-boost \
+  --no-interaction
+
+cd sistema-login
+```
+
+Ese único scaffold crea el formulario de login, Fortify, las rutas `/login` y
+`/logout`, validaciones, rate limiting, sesiones, middleware, estilos, Vite,
+migraciones y pruebas base. En Laravel 13 la plantilla PHP/Blade oficial es
+Livewire; Breeze corresponde a generaciones anteriores de Laravel.
+
+Para comprobar el login local recién generado antes de conectarlo al gateway:
+
+```bash
+php artisan migrate
+npm run build
+composer run dev
+```
+
+En otra terminal:
+
+```bash
+curl -I http://127.0.0.1:8000/login
+```
+
+Detener `composer run dev` con `Ctrl+C` antes de continuar.
+
+### 3. Generar desde plantillas las extensiones del gateway
+
+```bash
+composer require \
+  grpc/grpc:^1.81 \
+  google/protobuf:^5.35 \
+  ext-grpc:* \
+  --ignore-platform-req=ext-grpc \
+  --no-interaction
+
+php artisan make:interface Contracts/GatewayClient --no-interaction
+php artisan make:class Services/GrpcGatewayClient --no-interaction
+php artisan make:exception GatewayRpcException --no-interaction
+php artisan make:controller NotificationController --invokable --no-interaction
+php artisan make:middleware RevokeGatewaySessionOnLogout --no-interaction
+php artisan make:command GatewaySmokeCommand --no-interaction
+php artisan make:config gateway --no-interaction
+php artisan make:view notifications.index --no-interaction
+php artisan make:test GatewayAuthenticationTest --no-interaction
+```
+
+Todos esos archivos nacen de stubs mantenidos por Laravel. La implementación de
+este repositorio completa los stubs para delegar el login de Fortify al gateway,
+guardar los tokens en la sesión del servidor, consultar notificaciones y
+revocar la sesión en logout.
+
+### 4. Generar contratos y clientes gRPC
+
+Los `.proto` tampoco se redactan a mano: se exportan desde la reflexión del
+gateway y luego `protoc` genera las clases PHP.
+
+```bash
+mkdir -p proto
+
+grpcurl -plaintext \
+  -proto-out-dir proto \
+  academia-dev.eastus2.cloudapp.azure.com:50050 \
+  describe auth.v1.AuthService
+
+grpcurl -plaintext \
+  -proto-out-dir proto \
+  academia-dev.eastus2.cloudapp.azure.com:50050 \
+  describe notificaciones.v1.NotificationService
+
+sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\AuthV1";' proto/auth_v1.proto
+sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Auth\\\\V1";' proto/auth_v1.proto
+sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\NotificacionesV1";' proto/notificaciones_v1.proto
+sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Notificaciones\\\\V1";' proto/notificaciones_v1.proto
+
+docker run --rm \
+  -e HOST_UID="$(id -u)" \
+  -e HOST_GID="$(id -g)" \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  debian:bookworm-slim \
+  sh -lc '
+    apt-get update >/dev/null &&
+    apt-get install -y --no-install-recommends \
+      protobuf-compiler protobuf-compiler-grpc >/dev/null &&
+    mkdir -p /tmp/generated &&
+    protoc --proto_path=proto \
+      --php_out=/tmp/generated \
+      --grpc_out=/tmp/generated \
+      --plugin=protoc-gen-grpc=/usr/bin/grpc_php_plugin \
+      proto/auth_v1.proto proto/notificaciones_v1.proto &&
+    cp -R /tmp/generated/App/Grpc app/ &&
+    chown -R "$HOST_UID:$HOST_GID" app/Grpc
+  '
+
+composer dump-autoload
+```
+
+### 5. Generar el entorno Docker desde Laravel Sail
+
+```bash
+php artisan sail:install --with=none --no-interaction
+php artisan sail:publish --no-interaction
+
+docker compose build --build-arg PHP_EXTENSIONS=grpc
+docker compose up -d
+```
+
+La aplicación queda disponible en `http://localhost/login`. Si se configura
+`APP_PORT=8000`, queda en `http://localhost:8000/login`.
+
+### 6. Validar el resultado
+
+```bash
+docker compose exec laravel.test php artisan migrate --force
+docker compose exec laravel.test npm run build
+docker compose exec laravel.test php artisan test
+docker compose exec laravel.test php artisan gateway:smoke
+```
+
+El último comando solicita usuario y contraseña de forma interactiva y ejecuta
+login, consultas protegidas, logout, validación del token revocado y las dos
+pruebas negativas.
+
 ## Regla de construcción: solo scaffolding y plantillas
 
 Ningún archivo estructural de la aplicación se creó con `touch`, heredocs ni
