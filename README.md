@@ -186,6 +186,10 @@ php artisan make:command GatewaySmokeCommand --no-interaction
 php artisan make:config gateway --no-interaction
 php artisan make:view notifications.index --no-interaction
 php artisan make:test GatewayAuthenticationTest --no-interaction
+
+# make:view inserta una cita aleatoria; normalizarla para que el parche sea reproducible.
+sed -i "/<!-- .* -->/c\\    <!-- Normalized Laravel view stub. -->" \
+  resources/views/notifications/index.blade.php
 # ===== FIN DEL BLOQUE =====
 ```
 
@@ -255,30 +259,34 @@ que ya esté aplicado y comprueba los demás antes de modificar el proyecto.
 
 ```bash
 # ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
-PATCH_DIR="${PATCH_DIR:-../patches}"
-PATCHES=(
-  "$PATCH_DIR/0001-gateway-client.patch"
-  "$PATCH_DIR/0002-fortify-login-flow.patch"
-  "$PATCH_DIR/0003-tests-and-analysis.patch"
-)
+(
+  set -euo pipefail
 
-for PATCH_FILE in "${PATCHES[@]}"; do
-  if git apply --reverse --check "$PATCH_FILE" >/dev/null 2>&1; then
-    echo "Ya aplicado: $(basename "$PATCH_FILE")"
-  else
-    git apply --check "$PATCH_FILE"
-    git apply "$PATCH_FILE"
-    echo "Aplicado: $(basename "$PATCH_FILE")"
+  PATCH_DIR="${PATCH_DIR:-../patches}"
+  PATCHES=(
+    "$PATCH_DIR/0001-gateway-client.patch"
+    "$PATCH_DIR/0002-fortify-login-flow.patch"
+    "$PATCH_DIR/0003-tests-and-analysis.patch"
+  )
+
+  for PATCH_FILE in "${PATCHES[@]}"; do
+    if git apply --reverse --check "$PATCH_FILE" >/dev/null 2>&1; then
+      echo "Ya aplicado: $(basename "$PATCH_FILE")"
+    else
+      git apply --check "$PATCH_FILE"
+      git apply "$PATCH_FILE"
+      echo "Aplicado: $(basename "$PATCH_FILE")"
+    fi
+  done
+
+  if ! grep -q '^GATEWAY_GRPC_HOST=' .env; then
+    cp .env.example .env
+    php artisan key:generate --force
   fi
-done
 
-if ! grep -q '^GATEWAY_GRPC_HOST=' .env; then
-  cp .env.example .env
-  php artisan key:generate --force
-fi
-
-composer dump-autoload --ignore-platform-req=ext-grpc
-php artisan optimize:clear
+  composer dump-autoload --ignore-platform-req=ext-grpc
+  php artisan optimize:clear
+)
 # ===== FIN DEL BLOQUE =====
 ```
 
