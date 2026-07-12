@@ -42,6 +42,9 @@ Esta es la ruta principal solicitada. Comienza en un directorio que todavía no
 contiene un proyecto Laravel y utiliza el Starter Kit oficial de Livewire. No
 se crean vistas, controladores, middleware ni pruebas con archivos vacíos.
 
+> **INICIO DE LA RUTA PRINCIPAL:** seguir las secciones 1 a 8 en orden. En la
+> sección 6 hay que elegir una sola ruta de imagen, no ejecutar ambas.
+
 ### 1. Verificar requisitos
 
 Laravel 13 requiere PHP 8.3 o superior. El Starter Kit actual también necesita
@@ -311,7 +314,7 @@ como archivo del proyecto. La etiqueta final coincide con la que genera Sail en
 construcción completa.
 
 ```bash
-# ===== INICIO: RUTA RECOMENDADA, COPIAR TODO ESTE BLOQUE =====
+# ===== INICIO: ELEGIR SOLO ESTA RUTA RECOMENDADA Y COPIAR TODO =====
 grep -q 'WEBSERVER: cli' compose.yaml || \
   sed -i "/WWWUSER:/i\\            WWWGROUP: '\${WWWGROUP}'\\n            WEBSERVER: cli" compose.yaml
 
@@ -341,7 +344,7 @@ por la versión de Sail instalada en el proyecto y su argumento
 `PHP_EXTENSIONS`. Tarda más porque vuelve a construir todo el entorno.
 
 ```bash
-# ===== INICIO: ALTERNATIVA LOCAL, COPIAR TODO ESTE BLOQUE =====
+# ===== INICIO: ELEGIR SOLO ESTA ALTERNATIVA LOCAL Y COPIAR TODO =====
 grep -q 'PHP_EXTENSIONS:' compose.yaml || \
   sed -i "/^                WWWGROUP:/a\\                PHP_EXTENSIONS: 'grpc'" compose.yaml
 
@@ -392,6 +395,11 @@ El último comando solicita usuario y contraseña de forma interactiva y ejecuta
 login, consultas protegidas, logout, validación del token revocado y las dos
 pruebas negativas.
 
+> **FIN DE LA RUTA PRINCIPAL:** si las validaciones terminaron correctamente,
+> no hay que ejecutar todos los bloques siguientes en secuencia. Las secciones
+> posteriores documentan variantes, pruebas repetibles y una auditoría que
+> vuelve a mostrar parte del mismo proceso.
+
 ## Regla de construcción: solo scaffolding y plantillas
 
 Ningún archivo estructural de la aplicación se creó con `touch`, heredocs ni
@@ -422,21 +430,22 @@ y la contraseña y los envía directamente al RPC `Login`. El campo se llama
 del gateway.
 
 Para el smoke test se recomienda la entrada interactiva, que no deja la
-contraseña en el historial de la terminal:
+contraseña en el historial de la terminal. Los tres bloques de esta sección son
+**modalidades alternativas**: ejecutar solo uno.
 
 ```bash
-# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
+# ===== INICIO: ELEGIR SOLO ESTA MODALIDAD INTERACTIVA =====
 ./vendor/bin/sail artisan gateway:smoke
-# ===== FIN DEL BLOQUE =====
+# ===== FIN DE LA MODALIDAD INTERACTIVA =====
 ```
 
 También puede indicarse solo el usuario:
 
 ```bash
-# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
+# ===== INICIO: ELEGIR SOLO ESTA MODALIDAD CON USUARIO =====
 ./vendor/bin/sail artisan gateway:smoke \
   --username=usuario@institucion.edu.ec
-# ===== FIN DEL BLOQUE =====
+# ===== FIN DE LA MODALIDAD CON USUARIO =====
 ```
 
 Para automatización, definir `GATEWAY_SMOKE_USERNAME` y
@@ -444,9 +453,9 @@ Para automatización, definir `GATEWAY_SMOKE_USERNAME` y
 versionado; después ejecutar:
 
 ```bash
-# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
+# ===== INICIO: ELEGIR SOLO ESTA MODALIDAD AUTOMATIZADA =====
 ./vendor/bin/sail artisan gateway:smoke --no-prompt
-# ===== FIN DEL BLOQUE =====
+# ===== FIN DE LA MODALIDAD AUTOMATIZADA =====
 ```
 
 El comando no imprime tokens. Si el flujo falla después del login, intenta
@@ -522,6 +531,10 @@ El smoke test valida explícitamente:
 Esta sección permite auditar el scaffolding desde un directorio vacío. El
 comando oficial actual de Laravel 13 instala PHP 8.3 o superior y ofrece el
 Starter Kit de Livewire durante `laravel new`.
+
+> **NO CONTINUAR AQUÍ AUTOMÁTICAMENTE:** esta auditoría repite pasos de la ruta
+> principal. Ejecutar sus bloques solo si se quiere reconstruir y auditar el
+> proyecto desde otro directorio vacío.
 
 ### 1. Starter Kit
 
