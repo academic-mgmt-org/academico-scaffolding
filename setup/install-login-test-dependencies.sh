@@ -145,7 +145,7 @@ if ($missing !== []) {
 '
 }
 
-for command_name in curl grep install mktemp sha256sum tar tr uname; do
+for command_name in chmod curl grep install mktemp sha256sum tar tr uname; do
     require_command "$command_name"
 done
 
@@ -200,7 +200,24 @@ if composer_write_probe="$(mktemp "$composer_directory/.composer-write-test.XXXX
         printf 'WARNING: Composer could not update itself; continuing with the installed version.\n' >&2
     fi
 else
-    printf 'WARNING: Composer is installed in a non-writable directory; skipping self-update.\n' >&2
+    log "Installing the current Composer release in $LOCAL_BIN"
+    composer_installer="$(mktemp)"
+    trap 'rm -f "$composer_installer"' EXIT
+    composer_installer_signature="$(curl -fsSL https://composer.github.io/installer.sig)"
+    curl -fsSL https://getcomposer.org/installer -o "$composer_installer"
+    composer_installer_checksum="$(
+        php -r 'echo hash_file("sha384", $argv[1]);' "$composer_installer"
+    )"
+    [ "$composer_installer_checksum" = "$composer_installer_signature" ] \
+        || die "Composer installer signature verification failed"
+    php "$composer_installer" \
+        --install-dir="$LOCAL_BIN" \
+        --filename=composer \
+        --quiet
+    chmod 0755 "$LOCAL_BIN/composer"
+    rm -f "$composer_installer"
+    trap - EXIT
+    hash -r
 fi
 
 composer_global_bin="$(composer global config bin-dir --absolute --no-interaction 2>/dev/null)" \
