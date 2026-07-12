@@ -1,63 +1,43 @@
-<x-layouts::auth :title="__('Log in')">
+<x-layouts::auth title="Iniciar sesión">
     <div class="flex flex-col gap-6">
-        <x-auth-header :title="__('Log in to your account')" :description="__('Enter your email and password below to log in')" />
+        <x-auth-header title="Iniciar sesión" description="Las credenciales se validan en el gateway gRPC." />
 
         <!-- Session Status -->
         <x-auth-session-status class="text-center" :status="session('status')" />
 
-        {{-- @chisel-passkeys --}}
-        <x-passkey-verify />
-        {{-- @end-chisel-passkeys --}}
-
         <form method="POST" action="{{ route('login.store') }}" class="flex flex-col gap-6">
             @csrf
 
-            <!-- Email Address -->
+            <!-- Usuario del gateway -->
             <flux:input
                 name="email"
-                :label="__('Email address')"
+                label="Correo institucional"
                 :value="old('email')"
                 type="email"
                 required
                 autofocus
                 autocomplete="email"
-                placeholder="email@example.com"
+                placeholder="usuario@institucion.edu.ec"
             />
 
             <!-- Password -->
             <div class="relative">
                 <flux:input
                     name="password"
-                    :label="__('Password')"
+                    label="Contraseña"
                     type="password"
                     required
                     autocomplete="current-password"
-                    :placeholder="__('Password')"
+                    placeholder="Contraseña"
                     viewable
                 />
-
-                @if (Route::has('password.request'))
-                    <flux:link class="absolute top-0 text-sm end-0" :href="route('password.request')" wire:navigate>
-                        {{ __('Forgot your password?') }}
-                    </flux:link>
-                @endif
             </div>
-
-            <!-- Remember Me -->
-            <flux:checkbox name="remember" :label="__('Remember me')" :checked="old('remember')" />
 
             <div class="flex items-center justify-end">
                 <flux:button variant="primary" type="submit" class="w-full" data-test="login-button">
-                    {{ __('Log in') }}
+                    Iniciar sesión
                 </flux:button>
             </div>
         </form>
-
-        {{-- @chisel-registration --}}
-        <div class="space-x-1 text-sm text-center rtl:space-x-reverse text-zinc-600 dark:text-zinc-400">
-            <span>{{ __('Don\'t have an account?') }}</span>
-            <flux:link :href="route('register')" wire:navigate>{{ __('Sign up') }}</flux:link>
-        </div>
-        {{-- @end-chisel-registration --}}
     </div>
 </x-layouts::auth>

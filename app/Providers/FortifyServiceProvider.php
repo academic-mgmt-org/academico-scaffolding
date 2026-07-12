@@ -2,15 +2,19 @@
 
 namespace App\Providers;
 
+use App\Contracts\GatewayClient;
+use App\Exceptions\GatewayRpcException;
 /* @chisel-registration */
 use App\Actions\Fortify\CreateNewUser;
 /* @end-chisel-registration */
 use App\Actions\Fortify\ResetUserPassword;
+use App\Models\User;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Laravel\Fortify\Fortify;
 
 class FortifyServiceProvider extends ServiceProvider
@@ -29,8 +33,51 @@ class FortifyServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureActions();
+        $this->configureGatewayAuthentication();
         $this->configureViews();
         $this->configureRateLimiting();
+    }
+
+    /**
+     * Replace Fortify's local password check with the external gRPC gateway.
+     */
+    private function configureGatewayAuthentication(): void
+    {
+        Fortify::authenticateUsing(function (Request $request): ?User {
+            try {
+                $login = app(GatewayClient::class)->login(
+                    (string) $request->input(Fortify::username()),
+                    (string) $request->input('password'),
+                );
+            } catch (GatewayRpcException $exception) {
+                if ($exception->isUnauthenticated()) {
+                    return null;
+                }
+
+                report($exception);
+
+                throw ValidationException::withMessages([
+                    Fortify::username() => 'El gateway de autenticación no está disponible.',
+                ]);
+            }
+
+            $email = Str::lower((string) $request->input(Fortify::username()));
+            $user = User::query()->firstOrNew(['email' => $email]);
+            $user->forceFill([
+                'name' => $user->name ?: Str::headline(Str::before($email, '@')),
+                'password' => $user->password ?: Str::password(64),
+                'email_verified_at' => $user->email_verified_at ?: now(),
+            ])->save();
+
+            $request->session()->put('gateway_auth', [
+                'access_token' => $login['access_token'],
+                'refresh_token' => $login['refresh_token'],
+                'session_id' => $login['session_id'],
+                'expires_at' => now()->addSeconds(max(0, $login['expires_in']))->toIso8601String(),
+            ]);
+
+            return $user;
+        });
     }
 
     /**

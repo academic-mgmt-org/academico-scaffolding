@@ -1,7 +1,5 @@
 <?php
 
-use Laravel\Fortify\Features;
-
 return [
 
     /*
@@ -101,7 +99,7 @@ return [
     |
     */
 
-    'middleware' => ['web'],
+    'middleware' => ['web', App\Http\Middleware\RevokeGatewaySessionOnLogout::class],
 
     /*
     |--------------------------------------------------------------------------
@@ -166,26 +164,8 @@ return [
     |
     */
 
-    'features' => [
-        /* @chisel-registration */
-        Features::registration(),
-        /* @end-chisel-registration */
-        Features::resetPasswords(),
-        /* @chisel-email-verification */
-        Features::emailVerification(),
-        /* @end-chisel-email-verification */
-        /* @chisel-2fa */
-        Features::twoFactorAuthentication([
-            'confirm' => true,
-            'confirmPassword' => true,
-            // 'window' => 0
-        ]),
-        /* @end-chisel-2fa */
-        /* @chisel-passkeys */
-        Features::passkeys([
-            'confirmPassword' => true,
-        ]),
-        /* @end-chisel-passkeys */
-    ],
+    // El gateway externo es la única fuente de autenticación. Registro,
+    // recuperación, passkeys y 2FA locales permanecen deshabilitados.
+    'features' => [],
 
 ];
