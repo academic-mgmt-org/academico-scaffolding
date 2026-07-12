@@ -2,9 +2,10 @@
 
 const { chromium } = require('playwright');
 
-const LOGIN_URL = process.env.LOGIN_URL || 'http://localhost/login';
-const EMAIL = 'allunav@utn.edu.ec';
-const PASSWORD = 'password123';
+const LOGIN_URL = process.env.LOGIN_URL || 'http://localhost:8000/login';
+const EMAIL = process.env.LOGIN_EMAIL || 'allunav@utn.edu.ec';
+const PASSWORD = process.env.LOGIN_PASSWORD || 'password123';
+const SUCCESS_PATH = process.env.LOGIN_SUCCESS_PATH || '/dashboard';
 
 async function visibleLoginResult(page) {
     const messages = await page
@@ -28,6 +29,8 @@ async function run() {
 
     if (process.env.PLAYWRIGHT_CHANNEL) {
         launchOptions.channel = process.env.PLAYWRIGHT_CHANNEL;
+    } else if (process.platform === 'win32') {
+        launchOptions.channel = 'msedge';
     }
 
     const browser = await chromium.launch(launchOptions);
@@ -48,16 +51,30 @@ async function run() {
         await page.locator('[data-test="login-button"]').click();
         const loginResponse = await loginResponsePromise;
 
+        await page.waitForURL((url) => url.pathname !== '/login', {
+            timeout: 15_000,
+        }).catch(() => {});
+
+        const finalUrl = page.url();
+        const finalPath = new URL(finalUrl).pathname;
+        const success = loginResponse.status() < 400 && finalPath === SUCCESS_PATH;
+
         const result = {
+            success,
             requestUrl: loginResponse.url(),
             status: loginResponse.status(),
             statusText: loginResponse.statusText(),
-            finalUrl: page.url(),
+            finalUrl,
             response: await visibleLoginResult(page),
         };
 
-        console.log('Login result:');
-        console.log(JSON.stringify(result, null, 2));
+        const output = success ? console.log : console.error;
+        output('Login result:');
+        output(JSON.stringify(result, null, 2));
+
+        if (!success) {
+            process.exitCode = 1;
+        }
     } catch (error) {
         console.error('Login result:');
         console.error(JSON.stringify({ error: error.message }, null, 2));

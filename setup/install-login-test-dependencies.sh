@@ -4,12 +4,29 @@ set -Eeuo pipefail
 
 # Installs the dependencies that were missing on this host. Git, Node, npm,
 # Docker, Docker Compose, and unzip are validated because they were preinstalled.
-# Docker Buildx is installed from the configured APT repositories when missing.
+# Docker Buildx and fuser (from psmisc) are installed when missing.
+# Linux and Windows Git Bash use different PHP and grpcurl distributions.
 readonly PHP_VERSION="8.5"
 readonly GRPCURL_VERSION="1.9.3"
 readonly HERD_BIN="$HOME/.config/herd-lite/bin"
 readonly LOCAL_BIN="$HOME/.local/bin"
 readonly GATEWAY="academia-dev.eastus2.cloudapp.azure.com:50050"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+case "$(uname -s)" in
+    Linux*)
+        readonly HOST_PLATFORM="linux"
+        readonly EXECUTABLE_SUFFIX=""
+        ;;
+    MINGW* | MSYS*)
+        readonly HOST_PLATFORM="windows"
+        readonly EXECUTABLE_SUFFIX=".exe"
+        ;;
+    *)
+        printf 'ERROR: Unsupported operating system: %s\n' "$(uname -s)" >&2
+        exit 1
+        ;;
+esac
 
 log() {
     printf '\n==> %s\n' "$*"
@@ -24,27 +41,36 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
-for command_name in curl grep install mktemp sha256sum tar uname; do
+for command_name in curl grep install mktemp sha256sum tar tr uname; do
     require_command "$command_name"
 done
 
-mkdir -p "$HERD_BIN" "$LOCAL_BIN"
-export PATH="$HERD_BIN:$LOCAL_BIN:$PATH"
-export PHP_INI_SCAN_DIR="$HERD_BIN${PHP_INI_SCAN_DIR:+:$PHP_INI_SCAN_DIR}"
+if [ "$HOST_PLATFORM" = "windows" ]; then
+    require_command unzip
+fi
 
-php_toolchain_ready=true
-for command_name in php composer laravel; do
-    if ! command -v "$command_name" >/dev/null 2>&1; then
-        php_toolchain_ready=false
-    fi
-done
+mkdir -p "$LOCAL_BIN"
+export PATH="$LOCAL_BIN:$PATH"
 
-if $php_toolchain_ready && ! php -r \
-    'exit(version_compare(PHP_VERSION, "8.3.0", ">=") ? 0 : 1);'; then
-    php_toolchain_ready=false
+if [ "$HOST_PLATFORM" = "linux" ]; then
+    mkdir -p "$HERD_BIN"
+    export PATH="$HERD_BIN:$PATH"
+    export PHP_INI_SCAN_DIR="$HERD_BIN${PHP_INI_SCAN_DIR:+:$PHP_INI_SCAN_DIR}"
+fi
+
+php_toolchain_ready=false
+if command -v php >/dev/null 2>&1 \
+    && command -v composer >/dev/null 2>&1 \
+    && php -r 'exit(version_compare(PHP_VERSION, "8.3.0", ">=") ? 0 : 1);' \
+        >/dev/null 2>&1; then
+    php_toolchain_ready=true
 fi
 
 if ! $php_toolchain_ready; then
+    if [ "$HOST_PLATFORM" = "windows" ]; then
+        die "PHP 8.3 or newer and Composer must be installed before running this script in Git Bash"
+    fi
+
     log "Installing PHP $PHP_VERSION, Composer, and Laravel CLI from php.new"
     temp_installer="$(mktemp)"
     trap 'rm -f "$temp_installer"' EXIT
@@ -52,12 +78,37 @@ if ! $php_toolchain_ready; then
     TERM=xterm /bin/bash "$temp_installer"
     rm -f "$temp_installer"
     trap - EXIT
+    hash -r
 else
-    log "PHP, Composer, and Laravel CLI are already installed"
+    log "PHP and Composer are already installed"
 fi
 
 log "Updating Composer to the current stable release"
 composer self-update --stable --no-interaction
+
+composer_global_bin="$(composer global config bin-dir --absolute --no-interaction 2>/dev/null)" \
+    || die "Unable to determine Composer's global bin directory"
+if [ "$HOST_PLATFORM" = "windows" ]; then
+    composer_global_bin="$(printf '%s' "$composer_global_bin" | tr '\\' '/')"
+    if [[ "$composer_global_bin" =~ ^([[:alpha:]]):/(.*)$ ]]; then
+        composer_drive="${BASH_REMATCH[1],,}"
+        composer_global_bin="/$composer_drive/${BASH_REMATCH[2]}"
+    else
+        die "Unable to convert Composer's global bin directory for Git Bash: $composer_global_bin"
+    fi
+fi
+export PATH="$composer_global_bin:$PATH"
+
+if ! command -v laravel >/dev/null 2>&1; then
+    log "Installing the Laravel CLI"
+    composer global require laravel/installer --no-interaction --no-progress
+    hash -r
+else
+    log "Laravel CLI is already installed"
+fi
+
+laravel --version >/dev/null 2>&1 \
+    || die "Laravel CLI was installed, but it cannot be executed"
 
 case "$(uname -m)" in
     x86_64)
@@ -71,12 +122,22 @@ case "$(uname -m)" in
         ;;
 esac
 
-if ! grpcurl --version 2>&1 | grep -qx "grpcurl v$GRPCURL_VERSION"; then
+grpcurl_version_prefix="grpcurl"
+if [ "$HOST_PLATFORM" = "windows" ]; then
+    grpcurl_version_prefix="grpcurl.exe"
+fi
+
+if ! grpcurl --version 2>&1 \
+    | grep -qx "$grpcurl_version_prefix v$GRPCURL_VERSION"; then
     log "Installing grpcurl $GRPCURL_VERSION"
     temp_dir="$(mktemp -d)"
     trap 'rm -rf "$temp_dir"' EXIT
 
-    archive="grpcurl_${GRPCURL_VERSION}_linux_${grpcurl_arch}.tar.gz"
+    if [ "$HOST_PLATFORM" = "windows" ]; then
+        archive="grpcurl_${GRPCURL_VERSION}_windows_${grpcurl_arch}.zip"
+    else
+        archive="grpcurl_${GRPCURL_VERSION}_linux_${grpcurl_arch}.tar.gz"
+    fi
     release_url="https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}"
 
     curl -fsSL "$release_url/$archive" -o "$temp_dir/$archive"
@@ -84,22 +145,73 @@ if ! grpcurl --version 2>&1 | grep -qx "grpcurl v$GRPCURL_VERSION"; then
         "$release_url/grpcurl_${GRPCURL_VERSION}_checksums.txt" \
         -o "$temp_dir/checksums.txt"
 
-    checksum_line="$(grep "  ${archive}$" "$temp_dir/checksums.txt")" \
+    checksum_line="$(tr -d '\r' < "$temp_dir/checksums.txt" | grep "  ${archive}$")" \
         || die "Checksum for $archive was not found"
     (
         cd "$temp_dir"
         printf '%s\n' "$checksum_line" | sha256sum --check --strict -
     )
 
-    tar -xzf "$temp_dir/$archive" -C "$temp_dir" grpcurl
-    install -m 0755 "$temp_dir/grpcurl" "$LOCAL_BIN/grpcurl"
+    grpcurl_binary="grpcurl${EXECUTABLE_SUFFIX}"
+    if [ "$HOST_PLATFORM" = "windows" ]; then
+        unzip -q "$temp_dir/$archive" "$grpcurl_binary" -d "$temp_dir"
+    else
+        tar -xzf "$temp_dir/$archive" -C "$temp_dir" "$grpcurl_binary"
+    fi
+    install -m 0755 "$temp_dir/$grpcurl_binary" "$LOCAL_BIN/$grpcurl_binary"
+    hash -r
     rm -rf "$temp_dir"
     trap - EXIT
 else
     log "grpcurl $GRPCURL_VERSION is already installed"
 fi
 
+fuser_command="$(command -v fuser 2>/dev/null || true)"
+if [ -z "$fuser_command" ]; then
+    log "Installing fuser"
+    if [ "$HOST_PLATFORM" = "windows" ]; then
+        install -m 0755 "$SCRIPT_DIR/fuser-windows-wrapper.sh" "$LOCAL_BIN/fuser"
+    else
+        require_command apt-get
+
+        fuser_apt_command=(apt-get)
+        if (( EUID != 0 )); then
+            require_command sudo
+            fuser_apt_command=(sudo apt-get)
+        fi
+
+        "${fuser_apt_command[@]}" update
+        "${fuser_apt_command[@]}" install -y --no-install-recommends psmisc
+    fi
+    hash -r
+elif [ "$HOST_PLATFORM" = "windows" ] \
+    && [ "$fuser_command" = "$LOCAL_BIN/fuser" ] \
+    && grep -q 'FUSER_PORT' "$fuser_command"; then
+    install -m 0755 "$SCRIPT_DIR/fuser-windows-wrapper.sh" "$LOCAL_BIN/fuser"
+    hash -r
+    log "fuser is already installed"
+else
+    log "fuser is already installed"
+fi
+
+fuser --version >/dev/null 2>&1 \
+    || die "fuser was installed, but it cannot be executed"
+
 log "Validating preinstalled system requirements"
+if [ "$HOST_PLATFORM" = "windows" ]; then
+    docker_command="$(command -v docker 2>/dev/null || true)"
+    if [ -z "$docker_command" ]; then
+        require_command wsl.exe
+        log "Configuring the Docker CLI bridge to the default WSL distribution"
+        install -m 0755 "$SCRIPT_DIR/docker-wsl-wrapper.sh" "$LOCAL_BIN/docker"
+        hash -r
+    elif [ "$docker_command" = "$LOCAL_BIN/docker" ] \
+        && grep -q 'DOCKER_WSL_DISTRO' "$docker_command"; then
+        install -m 0755 "$SCRIPT_DIR/docker-wsl-wrapper.sh" "$LOCAL_BIN/docker"
+        hash -r
+    fi
+fi
+
 for command_name in git node npm docker unzip; do
     require_command "$command_name"
 done
@@ -114,6 +226,10 @@ docker info >/dev/null || die "Docker is installed, but its daemon is not access
 
 if ! docker buildx version >/dev/null 2>&1; then
     log "Installing Docker Buildx"
+    if [ "$HOST_PLATFORM" = "windows" ]; then
+        die "Docker Buildx is missing from the Docker installation exposed to Git Bash"
+    fi
+
     require_command apt-get
     require_command apt-cache
 
@@ -145,6 +261,68 @@ fi
 docker buildx version >/dev/null 2>&1 \
     || die "Docker Buildx was installed, but the Docker CLI cannot load it"
 
+if [ "$HOST_PLATFORM" = "windows" ]; then
+    log "Enabling required bundled PHP extensions when necessary"
+    php -r '
+$required = [
+    "curl", "dom", "fileinfo", "filter", "hash", "mbstring", "openssl",
+    "pdo", "pdo_sqlite", "session", "tokenizer", "xml", "zip",
+];
+$missing = array_values(array_filter(
+    $required,
+    static fn (string $extension): bool => !extension_loaded($extension),
+));
+if ($missing === []) {
+    exit(0);
+}
+
+$ini = php_ini_loaded_file();
+if ($ini === false || !is_writable($ini)) {
+    fwrite(STDERR, "PHP configuration is not writable: " . ($ini ?: "none") . PHP_EOL);
+    exit(1);
+}
+
+$configuration = file_get_contents($ini);
+if ($configuration === false) {
+    fwrite(STDERR, "Unable to read PHP configuration: $ini" . PHP_EOL);
+    exit(1);
+}
+
+$notConfigurable = [];
+foreach ($missing as $extension) {
+    $name = preg_quote($extension, "/");
+    $pattern = "/^[\\t ]*;[\\t ]*extension[\\t ]*=[\\t ]*(?:php_)?{$name}(?:\\.dll)?[\\t ]*(\\r?)$/mi";
+    $replacementCount = 0;
+    $configuration = preg_replace_callback(
+        $pattern,
+        static fn (array $matches): string => "extension=$extension" . $matches[1],
+        $configuration,
+        1,
+        $replacementCount,
+    );
+    if ($replacementCount !== 1) {
+        $notConfigurable[] = $extension;
+    }
+}
+
+if ($notConfigurable !== []) {
+    fwrite(
+        STDERR,
+        "Missing PHP extensions cannot be enabled from $ini: "
+            . implode(", ", $notConfigurable) . PHP_EOL,
+    );
+    exit(1);
+}
+
+if (file_put_contents($ini, $configuration, LOCK_EX) === false) {
+    fwrite(STDERR, "Unable to update PHP configuration: $ini" . PHP_EOL);
+    exit(1);
+}
+
+fwrite(STDOUT, "Enabled PHP extensions: " . implode(", ", $missing) . PHP_EOL);
+'
+fi
+
 php -r '
 $required = [
     "curl", "dom", "fileinfo", "filter", "hash", "mbstring", "openssl",
@@ -167,6 +345,7 @@ php --version | sed -n '1p'
 composer --version
 laravel --version
 grpcurl --version
+fuser --version
 node --version
 npm --version
 docker --version
@@ -181,6 +360,15 @@ else
 fi
 
 log "Configuring permanent PATH settings in shell profiles"
+if [ "$HOST_PLATFORM" = "windows" ]; then
+    touch "$HOME/.bashrc"
+    if [ ! -e "$HOME/.bash_profile" ] \
+        && [ ! -e "$HOME/.bash_login" ] \
+        && [ ! -e "$HOME/.profile" ]; then
+        printf '# Load interactive Git Bash settings.\n[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"\n' \
+            > "$HOME/.bash_profile"
+    fi
+fi
 for profile in "$HOME/.bashrc" "$HOME/.zshrc"; do
     if [ -f "$profile" ]; then
         updated=false
@@ -188,7 +376,12 @@ for profile in "$HOME/.bashrc" "$HOME/.zshrc"; do
             printf '\n# Added local bin to PATH\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$profile"
             updated=true
         fi
-        if ! grep -q 'herd-lite/bin' "$profile"; then
+        if ! grep -Fq "$composer_global_bin" "$profile"; then
+            printf '\n# Composer global executables\nexport PATH="%s:$PATH"\n' \
+                "$composer_global_bin" >> "$profile"
+            updated=true
+        fi
+        if [ "$HOST_PLATFORM" = "linux" ] && ! grep -q 'herd-lite/bin' "$profile"; then
             printf '\n# Laravel / Herd-Lite PHP Toolchain\n' >> "$profile"
             printf 'export PATH="$HOME/.config/herd-lite/bin:$PATH"\n' >> "$profile"
             printf 'export PHP_INI_SCAN_DIR="$HOME/.config/herd-lite/bin${PHP_INI_SCAN_DIR:+:$PHP_INI_SCAN_DIR}"\n' >> "$profile"

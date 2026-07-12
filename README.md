@@ -240,6 +240,12 @@ que ya esté aplicado y comprueba los demás antes de modificar el proyecto.
     GIT_APPLY+=(--directory="$PROJECT_PREFIX")
   fi
 
+  git_apply() {
+    local patch_file="$1"
+    shift
+    tr -d '\r' < "$patch_file" | "${GIT_APPLY[@]}" "$@"
+  }
+
   PATCH_DIR="${PATCH_DIR:-../patches}"
   PATCHES=(
     "$PATCH_DIR/0001-gateway-client.patch"
@@ -248,11 +254,11 @@ que ya esté aplicado y comprueba los demás antes de modificar el proyecto.
   )
 
   for PATCH_FILE in "${PATCHES[@]}"; do
-    if "${GIT_APPLY[@]}" --reverse --check "$PATCH_FILE" >/dev/null 2>&1; then
+    if git_apply "$PATCH_FILE" --reverse --check >/dev/null 2>&1; then
       echo "Ya aplicado: $(basename "$PATCH_FILE")"
     else
-      "${GIT_APPLY[@]}" --check "$PATCH_FILE"
-      "${GIT_APPLY[@]}" "$PATCH_FILE"
+      git_apply "$PATCH_FILE" --check
+      git_apply "$PATCH_FILE"
       echo "Aplicado: $(basename "$PATCH_FILE")"
     fi
   done
@@ -273,6 +279,11 @@ que ya esté aplicado y comprueba los demás antes de modificar el proyecto.
 `app/` y `config/` se aplican dentro de `sistema-login` en vez de ser ignoradas
 silenciosamente por Git. Si el proyecto es la raíz del repositorio o está fuera
 de uno, el comando conserva el comportamiento normal de `git apply`.
+
+`git_apply` normaliza los finales de línea antes de cada comprobación. Esto
+evita que `core.autocrlf=true` convierta los parches a CRLF en Windows mientras
+los archivos generados por Laravel permanecen con LF. `.gitattributes` también
+conserva los parches con LF en clones nuevos.
 
 Los parches se separan por responsabilidad: cliente gRPC, integración con
 Fortify y pruebas/análisis estático. No incluyen `.env`, credenciales, tokens,
@@ -299,8 +310,13 @@ Sail 1.63 intenta construir la imagen completa automáticamente durante
 un socket no válido; esto no modifica la configuración permanente de Docker.
 Después, el `Dockerfile` mínimo se entrega a Docker por la entrada estándar y
 no queda como archivo del proyecto. La etiqueta final coincide con la que Sail
-genera en `compose.yaml`, por lo que `sail up` utiliza la imagen preparada sin
-construir localmente todas las dependencias del entorno.
+genera en `compose.yaml`, por lo que `docker compose up --no-build` utiliza la
+imagen preparada sin reconstruir localmente las dependencias del entorno. Los
+comandos posteriores invocan Docker Compose directamente para ser compatibles
+con Git Bash; no ejecutan el wrapper de Sail, que rechaza el entorno MINGW.
+Las sustituciones de `WWWUSER` y `WWWGROUP` usan `1000` solo como valor
+predeterminado para el motor en WSL; pueden sobrescribirse en `.env` cuando el
+usuario del motor Docker tenga otros identificadores.
 
 ```bash
 # ===== INICIO: RUTA RECOMENDADA, COPIAR Y EJECUTAR TODO =====
@@ -309,6 +325,11 @@ DOCKER_HOST=unix:///dev/null \
 
 grep -q 'WEBSERVER: cli' compose.yaml || \
   sed -i "/WWWUSER:/i\\            WWWGROUP: '\${WWWGROUP}'\\n            WEBSERVER: cli" compose.yaml
+
+sed -i \
+  -e "s/'\${WWWUSER}'/'\${WWWUSER:-1000}'/g" \
+  -e "s/'\${WWWGROUP}'/'\${WWWGROUP:-1000}'/g" \
+  compose.yaml
 
 SAIL_BASE_IMAGE='ariaieboy/sail-runtime-image:8.5-24@sha256:d9f7f1ee244847612252222265d71e2340417a812a15d1cfa9f3433dafb5ea75'
 
@@ -323,9 +344,9 @@ printf '%s\n' \
     --file - \
     .
 
-./vendor/bin/sail config >/dev/null
-./vendor/bin/sail up -d
-./vendor/bin/sail php --ri grpc
+docker compose config >/dev/null
+docker compose up -d --no-build
+docker compose exec -T laravel.test php --ri grpc
 # ===== FIN DE LA RUTA RECOMENDADA =====
 ```
 
@@ -350,10 +371,15 @@ DOCKER_HOST=unix:///dev/null \
 grep -q 'PHP_EXTENSIONS:' compose.yaml || \
   sed -i "/^                WWWGROUP:/a\\                PHP_EXTENSIONS: 'grpc'" compose.yaml
 
-./vendor/bin/sail config >/dev/null
-./vendor/bin/sail build
-./vendor/bin/sail up -d
-./vendor/bin/sail php --ri grpc
+sed -i \
+  -e "s/'\${WWWUSER}'/'\${WWWUSER:-1000}'/g" \
+  -e "s/'\${WWWGROUP}'/'\${WWWGROUP:-1000}'/g" \
+  compose.yaml
+
+docker compose config >/dev/null
+docker compose build
+docker compose up -d --no-build
+docker compose exec -T laravel.test php --ri grpc
 # ===== FIN DE LA CONSTRUCCIÓN LOCAL OPCIONAL =====
 ```
 
@@ -365,20 +391,28 @@ en los siguientes pasos.
 
 ```bash
 # ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
-./vendor/bin/sail up -d
-./vendor/bin/sail artisan migrate --force
-./vendor/bin/sail npm run build
+docker compose up -d --no-build
+docker compose exec -T laravel.test php artisan migrate --force
+docker compose exec -T laravel.test npm ci
+docker compose exec -T laravel.test npm run build
 # ===== FIN DEL BLOQUE =====
 ```
 
-La aplicación queda disponible en `http://localhost/login`. Si se define
-`APP_PORT=8000` en `.env`, queda en `http://localhost:8000/login`.
+`npm ci` se ejecuta dentro del contenedor antes de compilar para instalar las
+dependencias nativas de Linux. No se debe reutilizar el directorio
+`node_modules` creado por npm en Windows, porque los bindings de Rolldown son
+específicos de cada sistema operativo.
+
+La configuración generada define `APP_PORT=8000`, por lo que la aplicación
+queda disponible en **` http://localhost:8000/login`**. No usar
+`http://localhost/login`: esa dirección utiliza el puerto 80 del anfitrión y
+puede responder desde otro servicio local, como Apache, en vez del contenedor.
 
 Para detener los servicios:
 
 ```bash
 # ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
-./vendor/bin/sail down
+docker compose down
 # ===== FIN DEL BLOQUE =====
 ```
 
@@ -386,10 +420,17 @@ Para detener los servicios:
 
 ```bash
 # ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
-./vendor/bin/sail composer test
-./vendor/bin/sail artisan gateway:smoke
+docker compose exec -T laravel.test composer test
+npm ci --prefix ..
+npm --prefix .. run test:login
+docker compose exec laravel.test php artisan gateway:smoke
 # ===== FIN DEL BLOQUE =====
 ```
+
+La prueba de navegador usa `http://localhost:8000/login` y Microsoft Edge de
+forma predeterminada en Windows. `LOGIN_URL`, `LOGIN_EMAIL`, `LOGIN_PASSWORD` y
+`PLAYWRIGHT_CHANNEL` permiten sobrescribir esos valores sin editar el script.
+El resultado debe incluir `"success": true` y terminar en `/dashboard`.
 
 El último comando solicita usuario y contraseña de forma interactiva y ejecuta
 login, consultas protegidas, logout, validación del token revocado y las dos
@@ -435,7 +476,7 @@ contraseña en el historial de la terminal. Los tres bloques de esta sección so
 
 ```bash
 # ===== INICIO: ELEGIR SOLO ESTA MODALIDAD INTERACTIVA =====
-./vendor/bin/sail artisan gateway:smoke
+docker compose exec laravel.test php artisan gateway:smoke
 # ===== FIN DE LA MODALIDAD INTERACTIVA =====
 ```
 
@@ -443,18 +484,19 @@ También puede indicarse solo el usuario:
 
 ```bash
 # ===== INICIO: ELEGIR SOLO ESTA MODALIDAD CON USUARIO =====
-./vendor/bin/sail artisan gateway:smoke \
+docker compose exec laravel.test php artisan gateway:smoke \
   --username=usuario@institucion.edu.ec
 # ===== FIN DE LA MODALIDAD CON USUARIO =====
 ```
 
 Para automatización, definir `GATEWAY_SMOKE_USERNAME` y
-`GATEWAY_SMOKE_PASSWORD` únicamente en el entorno o en un archivo `.env` no
-versionado; después ejecutar:
+`GATEWAY_SMOKE_PASSWORD` en el archivo `.env` no versionado; el contenedor lee
+ese archivo montado desde el proyecto. Después ejecutar:
 
 ```bash
 # ===== INICIO: ELEGIR SOLO ESTA MODALIDAD AUTOMATIZADA =====
-./vendor/bin/sail artisan gateway:smoke --no-prompt
+docker compose exec -T laravel.test \
+  php artisan gateway:smoke --no-prompt
 # ===== FIN DE LA MODALIDAD AUTOMATIZADA =====
 ```
 
@@ -505,7 +547,7 @@ Pruebas aisladas, sin usar credenciales ni la red:
 
 ```bash
 # ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
-./vendor/bin/sail composer test
+docker compose exec -T laravel.test composer test
 # ===== FIN DEL BLOQUE =====
 ```
 
@@ -513,7 +555,7 @@ Comprobación real de extremo a extremo contra el gateway:
 
 ```bash
 # ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
-./vendor/bin/sail artisan gateway:smoke
+docker compose exec laravel.test php artisan gateway:smoke
 # ===== FIN DEL BLOQUE =====
 ```
 
@@ -661,12 +703,12 @@ Ejecutar la sección
 elegir una sola de sus rutas. La recomendada reutiliza la base Sail
 preconstruida fijada por digest y construye únicamente la capa de
 `php8.5-grpc`. La alternativa auditable desde las fuentes ejecuta
-`./vendor/bin/sail build` con `PHP_EXTENSIONS=grpc`. Ambas terminan comprobando
+`docker compose build` con `PHP_EXTENSIONS=grpc`. Ambas terminan comprobando
 el resultado con:
 
 ```bash
 # ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
-./vendor/bin/sail php --ri grpc
+docker compose exec -T laravel.test php --ri grpc
 # ===== FIN DEL BLOQUE =====
 ```
 

@@ -1,0 +1,10 @@
+{
+  "name": "login-scaffolding-e2e",
+  "private": true,
+  "scripts": {
+    "test:login": "node tests/login.js"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1"
+  }
+}
