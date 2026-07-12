@@ -13,8 +13,8 @@ El proyecto ejecuta, en este orden:
 4. `auth.v1.AuthService/Logout` con access token y refresh token.
 5. Las pruebas negativas sin login y con el token revocado.
 
-El gateway configurado por defecto es. Este bloque es solo informativo; **no se
-copia ni se ejecuta**:
+El gateway configurado por defecto se muestra a continuación. Este bloque es
+solo informativo; **no se copia ni se ejecuta**:
 
 ```text
 academia-dev.eastus2.cloudapp.azure.com:50050
@@ -29,8 +29,8 @@ terminal. Los comentarios comienzan con `#`, por lo que Bash los ignora.
 
 - Una línea terminada en `\` continúa en la siguiente: forma parte del mismo
   comando y no debe separarse.
-- Cuando un bloque diga `ELEGIR SOLO ESTA OPCIÓN`, ejecutar únicamente el que
-  corresponda y omitir las demás alternativas.
+- Cuando un bloque diga `ELEGIR SOLO`, ejecutar únicamente el que corresponda
+  y omitir las demás alternativas.
 - Cuando se indiquen `TERMINAL 1` y `TERMINAL 2`, mantener la primera abierta y
   ejecutar el segundo bloque en otra ventana o pestaña.
 - Esperar siempre a que el bloque termine y vuelva a aparecer el prompt antes
