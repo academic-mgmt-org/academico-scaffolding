@@ -145,4 +145,24 @@ else
         "$GATEWAY" >&2
 fi
 
+log "Configuring permanent PATH settings in shell profiles"
+for profile in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    if [ -f "$profile" ]; then
+        updated=false
+        if ! grep -q '\.local/bin' "$profile"; then
+            printf '\n# Added local bin to PATH\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$profile"
+            updated=true
+        fi
+        if ! grep -q 'herd-lite/bin' "$profile"; then
+            printf '\n# Laravel / Herd-Lite PHP Toolchain\n' >> "$profile"
+            printf 'export PATH="$HOME/.config/herd-lite/bin:$PATH"\n' >> "$profile"
+            printf 'export PHP_INI_SCAN_DIR="$HOME/.config/herd-lite/bin${PHP_INI_SCAN_DIR:+:$PHP_INI_SCAN_DIR}"\n' >> "$profile"
+            updated=true
+        fi
+        if [ "$updated" = true ]; then
+            log "Updated $profile. Please run 'source $profile' or restart your terminal to apply changes."
+        fi
+    fi
+done
+
 log "Dependency setup complete"
