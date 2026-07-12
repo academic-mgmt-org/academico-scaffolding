@@ -182,7 +182,45 @@ docker run --rm \
 composer dump-autoload --ignore-platform-req=ext-grpc
 ```
 
-### 5. Construir la imagen de PHP con gRPC
+### 5. Aplicar automáticamente la implementación funcional
+
+Los generadores anteriores crean la estructura y los parches de este directorio
+incorporan la lógica funcional ya verificada. No hay que abrir ni editar ningún
+archivo. El bucle también es seguro al volver a ejecutarlo: omite cada parche
+que ya esté aplicado y comprueba los demás antes de modificar el proyecto.
+
+```bash
+PATCH_DIR="${PATCH_DIR:-/home/opc/login_test/patches}"
+PATCHES=(
+  "$PATCH_DIR/0001-gateway-client.patch"
+  "$PATCH_DIR/0002-fortify-login-flow.patch"
+  "$PATCH_DIR/0003-tests-and-analysis.patch"
+)
+
+for PATCH_FILE in "${PATCHES[@]}"; do
+  if git apply --reverse --check "$PATCH_FILE" >/dev/null 2>&1; then
+    echo "Ya aplicado: $(basename "$PATCH_FILE")"
+  else
+    git apply --check "$PATCH_FILE"
+    git apply "$PATCH_FILE"
+    echo "Aplicado: $(basename "$PATCH_FILE")"
+  fi
+done
+
+if ! grep -q '^GATEWAY_GRPC_HOST=' .env; then
+  cp .env.example .env
+  php artisan key:generate --force
+fi
+
+composer dump-autoload --ignore-platform-req=ext-grpc
+php artisan optimize:clear
+```
+
+Los parches se separan por responsabilidad: cliente gRPC, integración con
+Fortify y pruebas/análisis estático. No incluyen `.env`, credenciales, tokens,
+los `.proto` ni las clases generadas de `app/Grpc`.
+
+### 6. Construir la imagen de PHP con gRPC
 
 Laravel Sail genera `compose.yaml` y utiliza el argumento `PHP_EXTENSIONS` para
 instalar extensiones adicionales durante la construcción. El comando `sed` lo
@@ -194,20 +232,21 @@ php artisan sail:install --with=none --no-interaction
 grep -q 'PHP_EXTENSIONS:' compose.yaml || \
   sed -i "/WWWGROUP:/a\\                PHP_EXTENSIONS: 'grpc'" compose.yaml
 
-docker compose config >/dev/null
-docker compose build laravel.test
-docker compose run --rm laravel.test php --ri grpc
+./vendor/bin/sail config >/dev/null
+./vendor/bin/sail build
+./vendor/bin/sail up -d
+./vendor/bin/sail php --ri grpc
 ```
 
 El último comando debe mostrar la información de la extensión gRPC. La imagen
 resultante queda almacenada localmente y se reutiliza en los siguientes pasos.
 
-### 6. Iniciar la aplicación
+### 7. Iniciar la aplicación
 
 ```bash
-docker compose up -d
-docker compose exec laravel.test php artisan migrate --force
-docker compose exec laravel.test npm run build
+./vendor/bin/sail up -d
+./vendor/bin/sail artisan migrate --force
+./vendor/bin/sail npm run build
 ```
 
 La aplicación queda disponible en `http://localhost/login`. Si se define
@@ -216,14 +255,14 @@ La aplicación queda disponible en `http://localhost/login`. Si se define
 Para detener los servicios:
 
 ```bash
-docker compose down
+./vendor/bin/sail down
 ```
 
-### 7. Validar el resultado
+### 8. Validar el resultado
 
 ```bash
-docker compose exec laravel.test php artisan test
-docker compose exec laravel.test php artisan gateway:smoke
+./vendor/bin/sail composer test
+./vendor/bin/sail artisan gateway:smoke
 ```
 
 El último comando solicita usuario y contraseña de forma interactiva y ejecuta
@@ -241,6 +280,7 @@ copias escritas a mano. Cada pieza parte de una plantilla o un generador:
 | Cliente, contrato, excepción, controlador, middleware, comando, vista, configuración y prueba | `php artisan make:*` |
 | Contratos `.proto` | reflexión del gateway con `grpcurl -proto-out-dir` |
 | Clases y clientes PHP gRPC | `protoc` + `grpc_php_plugin` |
+| Implementación funcional sobre los stubs | parches reproducibles con `git apply` |
 | Imagen PHP con la extensión gRPC | Laravel Sail + `PHP_EXTENSIONS=grpc` |
 | `README.md` inicial | plantilla `--add-readme` de GitHub CLI |
 
@@ -259,14 +299,14 @@ Para el smoke test se recomienda la entrada interactiva, que no deja la
 contraseña en el historial de la terminal:
 
 ```bash
-docker compose exec laravel.test php artisan gateway:smoke
+./vendor/bin/sail artisan gateway:smoke
 ```
 
 También puede indicarse solo el usuario:
 
 ```bash
-docker compose exec laravel.test \
-  php artisan gateway:smoke --username=usuario@institucion.edu.ec
+./vendor/bin/sail artisan gateway:smoke \
+  --username=usuario@institucion.edu.ec
 ```
 
 Para automatización, definir `GATEWAY_SMOKE_USERNAME` y
@@ -274,7 +314,7 @@ Para automatización, definir `GATEWAY_SMOKE_USERNAME` y
 versionado; después ejecutar:
 
 ```bash
-docker compose exec laravel.test php artisan gateway:smoke --no-prompt
+./vendor/bin/sail artisan gateway:smoke --no-prompt
 ```
 
 El comando no imprime tokens. Si el flujo falla después del login, intenta
@@ -322,13 +362,13 @@ no está disponible.
 Pruebas aisladas, sin usar credenciales ni la red:
 
 ```bash
-docker compose exec laravel.test php artisan test
+./vendor/bin/sail composer test
 ```
 
 Comprobación real de extremo a extremo contra el gateway:
 
 ```bash
-docker compose exec laravel.test php artisan gateway:smoke
+./vendor/bin/sail artisan gateway:smoke
 ```
 
 El smoke test valida explícitamente:
@@ -444,7 +484,14 @@ docker run --rm \
 composer dump-autoload --ignore-platform-req=ext-grpc
 ```
 
-### 5. Construir y comprobar la imagen de PHP
+### 5. Aplicar la implementación generada y verificada
+
+Ejecutar el bloque de la sección
+“Aplicar automáticamente la implementación funcional”. Los tres archivos
+utilizados están en `/home/opc/login_test/patches` y se aplican con
+`git apply`; no requieren edición manual.
+
+### 6. Construir y comprobar la imagen de PHP
 
 ```bash
 php artisan sail:install --with=none --no-interaction
@@ -452,12 +499,13 @@ php artisan sail:install --with=none --no-interaction
 grep -q 'PHP_EXTENSIONS:' compose.yaml || \
   sed -i "/WWWGROUP:/a\\                PHP_EXTENSIONS: 'grpc'" compose.yaml
 
-docker compose config >/dev/null
-docker compose build laravel.test
-docker compose run --rm laravel.test php --ri grpc
+./vendor/bin/sail config >/dev/null
+./vendor/bin/sail build
+./vendor/bin/sail up -d
+./vendor/bin/sail php --ri grpc
 ```
 
-### 6. Crear y publicar el repositorio
+### 7. Crear y publicar el repositorio
 
 ```bash
 gh repo create academic-mgmt-org/login-scaffolding \
