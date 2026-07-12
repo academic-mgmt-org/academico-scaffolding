@@ -13,11 +13,28 @@ El proyecto ejecuta, en este orden:
 4. `auth.v1.AuthService/Logout` con access token y refresh token.
 5. Las pruebas negativas sin login y con el token revocado.
 
-El gateway configurado por defecto es:
+El gateway configurado por defecto es. Este bloque es solo informativo; **no se
+copia ni se ejecuta**:
 
 ```text
 academia-dev.eastus2.cloudapp.azure.com:50050
 ```
+
+## Cómo copiar y ejecutar los comandos
+
+Todos los bloques ejecutables están delimitados por comentarios `INICIO` y
+`FIN`. Salvo que el texto indique lo contrario, seleccionar desde el comentario
+`INICIO` hasta el comentario `FIN`, incluir ambos y pegar todo de una vez en la
+terminal. Los comentarios comienzan con `#`, por lo que Bash los ignora.
+
+- Una línea terminada en `\` continúa en la siguiente: forma parte del mismo
+  comando y no debe separarse.
+- Cuando un bloque diga `ELEGIR SOLO ESTA OPCIÓN`, ejecutar únicamente el que
+  corresponda y omitir las demás alternativas.
+- Cuando se indiquen `TERMINAL 1` y `TERMINAL 2`, mantener la primera abierta y
+  ejecutar el segundo bloque en otra ventana o pestaña.
+- Esperar siempre a que el bloque termine y vuelva a aparecer el prompt antes
+  de continuar, excepto cuando se indique que el proceso queda ejecutándose.
 
 ## Crear el login desde cero con plantillas predefinidas
 
@@ -39,6 +56,7 @@ conserva la construcción completa con el Dockerfile generado por Sail.
 ninguno de esos tres componentes necesita instalarse en el equipo anfitrión.
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 php --version
 composer --version
 node --version
@@ -47,31 +65,62 @@ docker --version
 docker compose version
 grpcurl --version
 fuser --version
+# ===== FIN DEL BLOQUE =====
 ```
 
-Si `fuser` no está disponible, instalar `psmisc` según la distribución:
+Si `fuser` no está disponible, elegir **solo el bloque de la distribución que
+corresponda**.
+
+Para Debian y Ubuntu:
 
 ```bash
-# Debian y Ubuntu
+# ===== INICIO: ELEGIR SOLO ESTA OPCIÓN PARA DEBIAN O UBUNTU =====
 sudo apt-get update
 sudo apt-get install -y psmisc
+# ===== FIN DE LA OPCIÓN DEBIAN O UBUNTU =====
+```
 
-# Fedora, RHEL, CentOS y derivados
+Para Fedora, RHEL, CentOS y derivados:
+
+```bash
+# ===== INICIO: ELEGIR SOLO ESTA OPCIÓN PARA FEDORA/RHEL/CENTOS =====
 sudo dnf install -y psmisc
+# ===== FIN DE LA OPCIÓN FEDORA/RHEL/CENTOS =====
 ```
 
 Si PHP, Composer y el instalador de Laravel no están disponibles en Linux, el
-instalador oficial se obtiene con:
+instalador oficial se obtiene ejecutando los siguientes **tres bloques en
+orden**. Esperar a que termine cada uno antes de copiar el siguiente.
+
+Paso 1 de 3, instalar PHP y Composer:
 
 ```bash
+# ===== INICIO: PASO 1 DE 3, EJECUTAR SOLO ESTE BLOQUE =====
 /bin/bash -c "$(curl -fsSL https://php.new/install/linux/8.5)"
+# ===== FIN DEL PASO 1 DE 3 =====
+```
+
+Paso 2 de 3, recargar la sesión. Este comando reemplaza la shell actual; esperar
+a que vuelva a aparecer el prompt:
+
+```bash
+# ===== INICIO: PASO 2 DE 3, EJECUTAR SOLO ESTE BLOQUE =====
 exec "$SHELL" -l
+# ===== FIN DEL PASO 2 DE 3 =====
+```
+
+Paso 3 de 3, instalar el comando `laravel`:
+
+```bash
+# ===== INICIO: PASO 3 DE 3, EJECUTAR SOLO ESTE BLOQUE =====
 composer global require laravel/installer
+# ===== FIN DEL PASO 3 DE 3 =====
 ```
 
 ### 2. Crear el proyecto con el Starter Kit oficial
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 laravel new sistema-login \
   --livewire \
   --phpunit \
@@ -81,6 +130,7 @@ laravel new sistema-login \
   --no-interaction
 
 cd sistema-login
+# ===== FIN DEL BLOQUE =====
 ```
 
 Ese único scaffold crea el formulario de login, Fortify, las rutas `/login` y
@@ -91,19 +141,24 @@ Livewire; Breeze corresponde a generaciones anteriores de Laravel.
 Para comprobar el login local recién generado antes de conectarlo al gateway:
 
 ```bash
+# ===== INICIO: TERMINAL 1, COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 php artisan migrate
 npm run build
 fuser -k -TERM 8000/tcp 2>/dev/null || true
 composer run dev
+# ===== FIN: DEJAR ESTA TERMINAL EJECUTANDO composer run dev =====
 ```
 
 El comando `fuser` termina cualquier proceso que esté usando el puerto TCP
 8000. `|| true` permite continuar normalmente cuando el puerto ya está libre.
 
-En otra terminal:
+Sin cerrar la terminal anterior, abrir la **TERMINAL 2** y ejecutar todo este
+bloque:
 
 ```bash
+# ===== INICIO: TERMINAL 2, COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 curl -I http://localhost:8000/login
+# ===== FIN DEL BLOQUE DE LA TERMINAL 2 =====
 ```
 
 Detener `composer run dev` con `Ctrl+C` antes de continuar.
@@ -111,6 +166,7 @@ Detener `composer run dev` con `Ctrl+C` antes de continuar.
 ### 3. Generar desde plantillas las extensiones del gateway
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 composer require \
   grpc/grpc:^1.81 \
   google/protobuf:^5.35 \
@@ -127,6 +183,7 @@ php artisan make:command GatewaySmokeCommand --no-interaction
 php artisan make:config gateway --no-interaction
 php artisan make:view notifications.index --no-interaction
 php artisan make:test GatewayAuthenticationTest --no-interaction
+# ===== FIN DEL BLOQUE =====
 ```
 
 Todos esos archivos nacen de stubs mantenidos por Laravel. La implementación de
@@ -144,6 +201,7 @@ Los `.proto` tampoco se redactan a mano: se exportan desde la reflexión del
 gateway y luego `protoc` genera las clases PHP.
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 mkdir -p proto
 
 grpcurl -plaintext \
@@ -182,6 +240,7 @@ docker run --rm \
   '
 
 composer dump-autoload --ignore-platform-req=ext-grpc
+# ===== FIN DEL BLOQUE =====
 ```
 
 ### 5. Aplicar automáticamente la implementación funcional
@@ -192,6 +251,7 @@ archivo. El bucle también es seguro al volver a ejecutarlo: omite cada parche
 que ya esté aplicado y comprueba los demás antes de modificar el proyecto.
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 PATCH_DIR="${PATCH_DIR:-../patches}"
 PATCHES=(
   "$PATCH_DIR/0001-gateway-client.patch"
@@ -216,6 +276,7 @@ fi
 
 composer dump-autoload --ignore-platform-req=ext-grpc
 php artisan optimize:clear
+# ===== FIN DEL BLOQUE =====
 ```
 
 Los parches se separan por responsabilidad: cliente gRPC, integración con
@@ -237,7 +298,9 @@ Primero generar la configuración de Sail. Después elegir **solo una** de las d
 rutas siguientes:
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 php artisan sail:install --with=none --no-interaction
+# ===== FIN DEL BLOQUE =====
 ```
 
 #### Ruta recomendada: reutilizar la base preconstruida
@@ -248,6 +311,7 @@ como archivo del proyecto. La etiqueta final coincide con la que genera Sail en
 construcción completa.
 
 ```bash
+# ===== INICIO: RUTA RECOMENDADA, COPIAR TODO ESTE BLOQUE =====
 grep -q 'WEBSERVER: cli' compose.yaml || \
   sed -i "/WWWUSER:/i\\            WWWGROUP: '\${WWWGROUP}'\\n            WEBSERVER: cli" compose.yaml
 
@@ -267,6 +331,7 @@ printf '%s\n' \
 ./vendor/bin/sail config >/dev/null
 ./vendor/bin/sail up -d
 ./vendor/bin/sail php --ri grpc
+# ===== FIN DE LA RUTA RECOMENDADA =====
 ```
 
 #### Alternativa: construir la imagen completa localmente
@@ -276,6 +341,7 @@ por la versión de Sail instalada en el proyecto y su argumento
 `PHP_EXTENSIONS`. Tarda más porque vuelve a construir todo el entorno.
 
 ```bash
+# ===== INICIO: ALTERNATIVA LOCAL, COPIAR TODO ESTE BLOQUE =====
 grep -q 'PHP_EXTENSIONS:' compose.yaml || \
   sed -i "/^                WWWGROUP:/a\\                PHP_EXTENSIONS: 'grpc'" compose.yaml
 
@@ -283,6 +349,7 @@ grep -q 'PHP_EXTENSIONS:' compose.yaml || \
 ./vendor/bin/sail build
 ./vendor/bin/sail up -d
 ./vendor/bin/sail php --ri grpc
+# ===== FIN DE LA ALTERNATIVA LOCAL =====
 ```
 
 En ambas rutas el último comando debe mostrar la información de la extensión
@@ -294,9 +361,11 @@ base como la capa de gRPC.
 ### 7. Iniciar la aplicación
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 ./vendor/bin/sail up -d
 ./vendor/bin/sail artisan migrate --force
 ./vendor/bin/sail npm run build
+# ===== FIN DEL BLOQUE =====
 ```
 
 La aplicación queda disponible en `http://localhost/login`. Si se define
@@ -305,14 +374,18 @@ La aplicación queda disponible en `http://localhost/login`. Si se define
 Para detener los servicios:
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 ./vendor/bin/sail down
+# ===== FIN DEL BLOQUE =====
 ```
 
 ### 8. Validar el resultado
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 ./vendor/bin/sail composer test
 ./vendor/bin/sail artisan gateway:smoke
+# ===== FIN DEL BLOQUE =====
 ```
 
 El último comando solicita usuario y contraseña de forma interactiva y ejecuta
@@ -352,14 +425,18 @@ Para el smoke test se recomienda la entrada interactiva, que no deja la
 contraseña en el historial de la terminal:
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 ./vendor/bin/sail artisan gateway:smoke
+# ===== FIN DEL BLOQUE =====
 ```
 
 También puede indicarse solo el usuario:
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 ./vendor/bin/sail artisan gateway:smoke \
   --username=usuario@institucion.edu.ec
+# ===== FIN DEL BLOQUE =====
 ```
 
 Para automatización, definir `GATEWAY_SMOKE_USERNAME` y
@@ -367,7 +444,9 @@ Para automatización, definir `GATEWAY_SMOKE_USERNAME` y
 versionado; después ejecutar:
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 ./vendor/bin/sail artisan gateway:smoke --no-prompt
+# ===== FIN DEL BLOQUE =====
 ```
 
 El comando no imprime tokens. Si el flujo falla después del login, intenta
@@ -393,7 +472,8 @@ Si el gateway responde correctamente:
 ### Notificaciones
 
 `GET /dashboard` exige el middleware `auth`. El controlador obtiene el access
-token de la sesión y llama al mismo host gRPC:
+token de la sesión y llama al mismo host gRPC. El siguiente bloque representa
+el flujo; es solo informativo y **no se copia ni se ejecuta**:
 
 ```text
 CountUnread -> ListNotifications(estado=no_leido, limit=unreadCount)
@@ -415,13 +495,17 @@ no está disponible.
 Pruebas aisladas, sin usar credenciales ni la red:
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 ./vendor/bin/sail composer test
+# ===== FIN DEL BLOQUE =====
 ```
 
 Comprobación real de extremo a extremo contra el gateway:
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 ./vendor/bin/sail artisan gateway:smoke
+# ===== FIN DEL BLOQUE =====
 ```
 
 El smoke test valida explícitamente:
@@ -442,6 +526,7 @@ Starter Kit de Livewire durante `laravel new`.
 ### 1. Starter Kit
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 composer global require laravel/installer
 
 laravel new login-scaffolding \
@@ -452,6 +537,7 @@ laravel new login-scaffolding \
   --no-interaction
 
 cd login-scaffolding
+# ===== FIN DEL BLOQUE =====
 ```
 
 Laravel 13 ya no utiliza Breeze como Starter Kit principal. Livewire genera el
@@ -463,6 +549,7 @@ autenticación.
 ### 2. Dependencias y clases desde plantillas
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 composer require grpc/grpc:^1.81 google/protobuf:^5.35 'ext-grpc:*' \
   --ignore-platform-req=ext-grpc
 
@@ -475,6 +562,7 @@ php artisan make:command GatewaySmokeCommand
 php artisan make:config gateway
 php artisan make:view notifications.index
 php artisan make:test GatewayAuthenticationTest
+# ===== FIN DEL BLOQUE =====
 ```
 
 ### 3. Obtener los contratos desde reflexión
@@ -483,6 +571,7 @@ Requiere `grpcurl`. Estos comandos no escriben contratos a mano: los exportan
 desde el gateway desplegado.
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 mkdir -p proto
 
 grpcurl -plaintext \
@@ -494,6 +583,7 @@ grpcurl -plaintext \
   -proto-out-dir proto \
   academia-dev.eastus2.cloudapp.azure.com:50050 \
   describe notificaciones.v1.NotificationService
+# ===== FIN DEL BLOQUE =====
 ```
 
 `grpcurl` exporta `auth_v1.proto` y `notificaciones_v1.proto`. Antes de ejecutar
@@ -501,10 +591,12 @@ grpcurl -plaintext \
 dentro del autoload `App\\` de la plantilla Laravel:
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\AuthV1";' proto/auth_v1.proto
 sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Auth\\\\V1";' proto/auth_v1.proto
 sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\NotificacionesV1";' proto/notificaciones_v1.proto
 sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Notificaciones\\\\V1";' proto/notificaciones_v1.proto
+# ===== FIN DEL BLOQUE =====
 ```
 
 ### 4. Generar los clientes PHP
@@ -514,6 +606,7 @@ La generación se ejecuta en una imagen desechable que contiene `protoc` y
 usuario anfitrión.
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 docker run --rm \
   -e HOST_UID="$(id -u)" \
   -e HOST_GID="$(id -g)" \
@@ -535,6 +628,7 @@ docker run --rm \
   '
 
 composer dump-autoload --ignore-platform-req=ext-grpc
+# ===== FIN DEL BLOQUE =====
 ```
 
 ### 5. Aplicar la implementación generada y verificada
@@ -555,12 +649,15 @@ preconstruida fijada por digest y construye únicamente la capa de
 el resultado con:
 
 ```bash
+# ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
 ./vendor/bin/sail php --ri grpc
+# ===== FIN DEL BLOQUE =====
 ```
 
 ### 7. Crear y publicar el repositorio
 
 ```bash
+# ===== INICIO: PUBLICACIÓN OPCIONAL, COPIAR TODO ESTE BLOQUE =====
 gh repo create academic-mgmt-org/login-scaffolding \
   --private \
   --add-readme \
@@ -569,6 +666,7 @@ gh repo create academic-mgmt-org/login-scaffolding \
 git add .
 git commit -m "feat: add template-generated Laravel gRPC login flow"
 git push -u origin main
+# ===== FIN DEL BLOQUE DE PUBLICACIÓN OPCIONAL =====
 ```
 
 ## Configuración
