@@ -192,8 +192,15 @@ if [ "$HOST_PLATFORM" = "windows" ]; then
 fi
 
 log "Updating Composer to the current stable release"
-if ! composer self-update --stable --no-interaction; then
-    printf 'WARNING: Composer could not update itself; continuing with the installed version.\n' >&2
+composer_command="$(command -v composer)"
+composer_directory="${composer_command%/*}"
+if composer_write_probe="$(mktemp "$composer_directory/.composer-write-test.XXXXXX" 2>/dev/null)"; then
+    rm -f "$composer_write_probe"
+    if ! composer self-update --stable --no-interaction; then
+        printf 'WARNING: Composer could not update itself; continuing with the installed version.\n' >&2
+    fi
+else
+    printf 'WARNING: Composer is installed in a non-writable directory; skipping self-update.\n' >&2
 fi
 
 composer_global_bin="$(composer global config bin-dir --absolute --no-interaction 2>/dev/null)" \
@@ -409,6 +416,8 @@ fi
 
 log "Configuring permanent PATH settings in shell profiles"
 if [ "$HOST_PLATFORM" = "windows" ]; then
+    php_command="$(command -v php)"
+    windows_php_bin="${php_command%/*}"
     touch "$HOME/.bashrc"
     if [ ! -e "$HOME/.bash_profile" ] \
         && [ ! -e "$HOME/.bash_login" ] \
@@ -427,6 +436,12 @@ for profile in "$HOME/.bashrc" "$HOME/.zshrc"; do
         if ! grep -Fq "$composer_global_bin" "$profile"; then
             printf '\n# Composer global executables\nexport PATH="%s:$PATH"\n' \
                 "$composer_global_bin" >> "$profile"
+            updated=true
+        fi
+        if [ "$HOST_PLATFORM" = "windows" ] \
+            && ! grep -Fq "$windows_php_bin" "$profile"; then
+            printf '\n# Project-compatible PHP runtime\nexport PATH="%s:$PATH"\n' \
+                "$windows_php_bin" >> "$profile"
             updated=true
         fi
         if [ "$HOST_PLATFORM" = "linux" ] && ! grep -q 'herd-lite/bin' "$profile"; then
