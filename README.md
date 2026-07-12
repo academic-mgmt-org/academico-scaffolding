@@ -188,7 +188,7 @@ php artisan make:view notifications.index --no-interaction
 php artisan make:test GatewayAuthenticationTest --no-interaction
 
 # make:view inserta una cita aleatoria; normalizarla para que el parche sea reproducible.
-sed -i "/<!-- .* -->/c\\    <!-- Normalized Laravel view stub. -->" \
+sed -i '/<!-- .* -->/c\    <!-- Normalized Laravel view stub. -->' \
   resources/views/notifications/index.blade.php
 # ===== FIN DEL BLOQUE =====
 ```
