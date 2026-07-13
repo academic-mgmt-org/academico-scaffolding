@@ -1564,10 +1564,10 @@ index 86001bddad928ef153d208fa6aa2f61bdb94a1a8..e2351c53a45cfdc76f2f5592058a5fdd
              </div>
          </form>
 diff --git a/routes/web.php b/routes/web.php
-index 6b40f2cbcd2c6cf5ac8f915a2e3e94036b9bef3e..de46f7d6c95649fdd15a00f842b9b7de001becd3 100644
+index 6b40f2cbcd2c6cf5ac8f915a2e3e94036b9bef3e..dfcf0851a0b806764218f594fc10f48eab33593f 100644
 --- a/routes/web.php
 +++ b/routes/web.php
-@@ -1,12 +1,27 @@
+@@ -1,12 +1,29 @@
  <?php
  
 +use App\Http\Controllers\GatewayDashboardController;
@@ -1582,12 +1582,14 @@ index 6b40f2cbcd2c6cf5ac8f915a2e3e94036b9bef3e..de46f7d6c95649fdd15a00f842b9b7de
 -Route::get('dashboard', NotificationController::class)
 -    ->middleware('auth')
 -    ->name('dashboard');
-+Route::middleware('guest')->group(function () {
-+    Route::get('forgot-password', [GatewayPasswordController::class, 'forgot'])->name('password.request');
-+    Route::post('forgot-password', [GatewayPasswordController::class, 'sendResetLink'])->name('password.email');
-+    Route::get('reset-password', [GatewayPasswordController::class, 'reset'])->name('password.reset');
-+    Route::post('reset-password', [GatewayPasswordController::class, 'updatePassword'])->name('password.update');
-+});
++Route::get('forgot-password', [GatewayPasswordController::class, 'forgot'])->name('password.request');
++Route::post('forgot-password', [GatewayPasswordController::class, 'sendResetLink'])
++    ->middleware('throttle:5,1')
++    ->name('password.email');
++Route::get('reset-password', [GatewayPasswordController::class, 'reset'])->name('password.reset');
++Route::post('reset-password', [GatewayPasswordController::class, 'updatePassword'])
++    ->middleware('throttle:5,1')
++    ->name('password.update');
 +
 +Route::middleware(['auth', EnsureGatewaySession::class])->group(function () {
 +    Route::get('dashboard', GatewayDashboardController::class)->name('dashboard');
