@@ -55,6 +55,9 @@ docker compose up -d --no-build
 docker compose exec -T laravel.test php artisan route:list --name=academic
 ```
 
+Una vez iniciado el contenedor con la configuración predeterminada, abrir la
+aplicación en [http://localhost/academico/login](http://localhost/academico/login).
+
 El host predeterminado es
 `academia-dev.eastus2.cloudapp.azure.com:50050`. Puede cambiarse en `.env` con
 `GATEWAY_GRPC_HOST`; para un endpoint TLS, definir además
