@@ -2,25 +2,19 @@
 
 set -Eeuo pipefail
 
-# Installs the dependencies that were missing on this host. Git, Node, npm,
-# Docker, Docker Compose, and unzip are validated because they were preinstalled.
-# Docker Buildx and fuser (from psmisc) are installed when missing.
-# Linux and Windows Git Bash use different PHP and grpcurl distributions.
+# Installs or validates the toolchain used by every modular interface.
+# Docker Buildx is installed when missing. The generated runtime provides gRPC.
 readonly PHP_VERSION="8.5"
-readonly GRPCURL_VERSION="1.9.3"
 readonly HERD_BIN="$HOME/.config/herd-lite/bin"
 readonly LOCAL_BIN="$HOME/.local/bin"
-readonly GATEWAY="academia-dev.eastus2.cloudapp.azure.com:50050"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 case "$(uname -s)" in
     Linux*)
         readonly HOST_PLATFORM="linux"
-        readonly EXECUTABLE_SUFFIX=""
         ;;
     MINGW* | MSYS*)
         readonly HOST_PLATFORM="windows"
-        readonly EXECUTABLE_SUFFIX=".exe"
         ;;
     *)
         printf 'ERROR: Unsupported operating system: %s\n' "$(uname -s)" >&2
@@ -145,7 +139,7 @@ if ($missing !== []) {
 '
 }
 
-for command_name in chmod curl grep install mktemp sha256sum tar tr uname; do
+for command_name in chmod curl grep install mktemp sha256sum tr uname; do
     require_command "$command_name"
 done
 
@@ -244,93 +238,6 @@ hash -r
 laravel --version >/dev/null 2>&1 \
     || die "Laravel CLI was installed, but it cannot be executed"
 
-case "$(uname -m)" in
-    x86_64)
-        grpcurl_arch="x86_64"
-        ;;
-    aarch64 | arm64)
-        grpcurl_arch="arm64"
-        ;;
-    *)
-        die "Unsupported grpcurl architecture: $(uname -m)"
-        ;;
-esac
-
-grpcurl_version_prefix="grpcurl"
-if [ "$HOST_PLATFORM" = "windows" ]; then
-    grpcurl_version_prefix="grpcurl.exe"
-fi
-
-if ! grpcurl --version 2>&1 \
-    | grep -qx "$grpcurl_version_prefix v$GRPCURL_VERSION"; then
-    log "Installing grpcurl $GRPCURL_VERSION"
-    temp_dir="$(mktemp -d)"
-    trap 'rm -rf "$temp_dir"' EXIT
-
-    if [ "$HOST_PLATFORM" = "windows" ]; then
-        archive="grpcurl_${GRPCURL_VERSION}_windows_${grpcurl_arch}.zip"
-    else
-        archive="grpcurl_${GRPCURL_VERSION}_linux_${grpcurl_arch}.tar.gz"
-    fi
-    release_url="https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}"
-
-    curl -fsSL "$release_url/$archive" -o "$temp_dir/$archive"
-    curl -fsSL \
-        "$release_url/grpcurl_${GRPCURL_VERSION}_checksums.txt" \
-        -o "$temp_dir/checksums.txt"
-
-    checksum_line="$(tr -d '\r' < "$temp_dir/checksums.txt" | grep "  ${archive}$")" \
-        || die "Checksum for $archive was not found"
-    (
-        cd "$temp_dir"
-        printf '%s\n' "$checksum_line" | sha256sum --check --strict -
-    )
-
-    grpcurl_binary="grpcurl${EXECUTABLE_SUFFIX}"
-    if [ "$HOST_PLATFORM" = "windows" ]; then
-        unzip -q "$temp_dir/$archive" "$grpcurl_binary" -d "$temp_dir"
-    else
-        tar -xzf "$temp_dir/$archive" -C "$temp_dir" "$grpcurl_binary"
-    fi
-    install -m 0755 "$temp_dir/$grpcurl_binary" "$LOCAL_BIN/$grpcurl_binary"
-    hash -r
-    rm -rf "$temp_dir"
-    trap - EXIT
-else
-    log "grpcurl $GRPCURL_VERSION is already installed"
-fi
-
-fuser_command="$(command -v fuser 2>/dev/null || true)"
-if [ -z "$fuser_command" ]; then
-    log "Installing fuser"
-    if [ "$HOST_PLATFORM" = "windows" ]; then
-        install -m 0755 "$SCRIPT_DIR/fuser-windows-wrapper.sh" "$LOCAL_BIN/fuser"
-    else
-        require_command apt-get
-
-        fuser_apt_command=(apt-get)
-        if (( EUID != 0 )); then
-            require_command sudo
-            fuser_apt_command=(sudo apt-get)
-        fi
-
-        "${fuser_apt_command[@]}" update
-        "${fuser_apt_command[@]}" install -y --no-install-recommends psmisc
-    fi
-    hash -r
-elif [ "$HOST_PLATFORM" = "windows" ] \
-    && [ "$fuser_command" = "$LOCAL_BIN/fuser" ] \
-    && grep -q 'FUSER_PORT' "$fuser_command"; then
-    install -m 0755 "$SCRIPT_DIR/fuser-windows-wrapper.sh" "$LOCAL_BIN/fuser"
-    hash -r
-    log "fuser is already installed"
-else
-    log "fuser is already installed"
-fi
-
-fuser --version >/dev/null 2>&1 \
-    || die "fuser was installed, but it cannot be executed"
-
 log "Validating preinstalled system requirements"
 if [ "$HOST_PLATFORM" = "windows" ]; then
     docker_command="$(command -v docker 2>/dev/null || true)"
@@ -416,20 +323,11 @@ log "Installed versions"
 php --version | sed -n '1p'
 composer --version
 laravel --version
-grpcurl --version
-fuser --version
 node --version
 npm --version
 docker --version
 docker compose version
 docker buildx version
-
-if grpcurl -max-time 10 -plaintext "$GATEWAY" list >/dev/null; then
-    log "Gateway reflection is reachable at $GATEWAY"
-else
-    printf 'WARNING: Dependencies are installed, but gateway reflection is unavailable at %s\n' \
-        "$GATEWAY" >&2
-fi
 
 log "Configuring permanent PATH settings in shell profiles"
 if [ "$HOST_PLATFORM" = "windows" ]; then

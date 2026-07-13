@@ -1,0 +1,1423 @@
+diff --git a/app/Contracts/AcademicGateway.php b/app/Contracts/AcademicGateway.php
+index e129db6..0b5dabb 100644
+--- a/app/Contracts/AcademicGateway.php
++++ b/app/Contracts/AcademicGateway.php
+@@ -4,5 +4,11 @@
+ 
+ interface AcademicGateway
+ {
+-    //
++    /**
++     * Invoke an RPC explicitly registered by the installed interface module.
++     *
++     * @param  array<string, mixed>  $payload
++     * @return array<string, mixed>
++     */
++    public function invoke(string $rpc, array $payload = [], string $accessToken = ''): array;
+ }
+diff --git a/app/Exceptions/AcademicGatewayException.php b/app/Exceptions/AcademicGatewayException.php
+index 836fa08..1e0f9ae 100644
+--- a/app/Exceptions/AcademicGatewayException.php
++++ b/app/Exceptions/AcademicGatewayException.php
+@@ -2,9 +2,25 @@
+ 
+ namespace App\Exceptions;
+ 
+-use Exception;
++use RuntimeException;
+ 
+-class AcademicGatewayException extends Exception
++class AcademicGatewayException extends RuntimeException
+ {
+-    //
++    public function __construct(
++        public readonly string $rpc,
++        public readonly int $statusCode,
++        string $details,
++        ?\Throwable $previous = null,
++    ) {
++        parent::__construct(
++            sprintf('Gateway RPC %s failed with status %d: %s', $rpc, $statusCode, $details),
++            $statusCode,
++            $previous,
++        );
++    }
++
++    public function isAuthenticationFailure(): bool
++    {
++        return $this->statusCode === 16;
++    }
+ }
+diff --git a/app/Http/Controllers/AcademicInterfaceController.php b/app/Http/Controllers/AcademicInterfaceController.php
+index 0badea4..10e5664 100644
+--- a/app/Http/Controllers/AcademicInterfaceController.php
++++ b/app/Http/Controllers/AcademicInterfaceController.php
+@@ -2,9 +2,276 @@
+ 
+ namespace App\Http\Controllers;
+ 
++use App\Contracts\AcademicGateway;
++use App\Exceptions\AcademicGatewayException;
++use Illuminate\Http\RedirectResponse;
+ use Illuminate\Http\Request;
++use Illuminate\Support\Arr;
++use Illuminate\Support\Facades\Log;
++use Illuminate\View\View;
+ 
+ class AcademicInterfaceController extends Controller
+ {
+-    //
++    public function __construct(private readonly AcademicGateway $gateway) {}
++
++    public function show(Request $request): View
++    {
++        $module = $this->module();
++        $context = $this->context($request, $module);
++        $actions = [];
++
++        foreach ($module['actions'] as $key => $action) {
++            $action['payload'] = $this->resolvePayload($action['payload'] ?? [], $context);
++            $action['completed_at'] = $request->session()->get("academic.interface.completed.{$key}");
++            $actions[$key] = $action;
++        }
++
++        return view('academic-interface::interface', [
++            'module' => $module,
++            'actions' => $actions,
++            'context' => $context,
++            'identity' => $this->identity($request),
++            'lastResult' => $request->session()->get('academic.interface.last_result'),
++        ]);
++    }
++
++    public function execute(Request $request, string $action): RedirectResponse
++    {
++        $module = $this->module();
++        abort_unless(isset($module['actions'][$action]) && is_array($module['actions'][$action]), 404);
++
++        $step = $module['actions'][$action];
++        $context = $this->context($request, $module);
++        $expected = $this->resolvePayload($step['payload'] ?? [], $context);
++        $types = is_array($step['types'] ?? null) ? $step['types'] : [];
++        $optional = is_array($step['optional'] ?? null) ? $step['optional'] : [];
++        $rules = [];
++
++        foreach (array_keys($expected) as $field) {
++            $type = $types[$field] ?? 'string';
++            $presence = in_array($field, $optional, true) ? 'nullable' : 'required';
++            $rules["payload.{$field}"] = match ($type) {
++                'boolean' => [$presence, 'boolean'],
++                'integer' => [$presence, 'integer'],
++                'number' => [$presence, 'numeric'],
++                'email' => [$presence, 'email:rfc', 'max:255'],
++                'url' => [$presence, 'url:http,https', 'max:2048'],
++                'date' => [$presence, 'date_format:Y-m-d'],
++                default => [$presence, 'string', 'max:5000'],
++            };
++        }
++
++        /** @var array{payload?: array<string, mixed>} $validated */
++        $validated = $request->validate($rules);
++        $submitted = $validated['payload'] ?? [];
++        $payload = [];
++
++        foreach ($expected as $field => $default) {
++            $value = $submitted[$field] ?? $default;
++
++            if (in_array($field, $optional, true) && ($value === null || trim((string) $value) === '')) {
++                continue;
++            }
++
++            $payload[$field] = match ($types[$field] ?? 'string') {
++                'boolean' => filter_var($value, FILTER_VALIDATE_BOOL),
++                'integer' => (int) $value,
++                'number' => (float) $value,
++                default => trim((string) $value),
++            };
++        }
++
++        if (! $this->roleAllowed($request, $step)) {
++            return back()->withInput()->with('academic_error', [
++                'status' => 7,
++                'rpc' => (string) $step['rpc'],
++                'message' => 'El rol de la sesión no puede ejecutar esta acción.',
++            ]);
++        }
++
++        $authenticated = (bool) ($step['authenticated'] ?? true);
++        $accessToken = $authenticated
++            ? (string) $request->session()->get((string) config('academic-interface.session.access_token'), '')
++            : '';
++
++        try {
++            $result = $this->gateway->invoke((string) $step['rpc'], $payload, $accessToken);
++        } catch (AcademicGatewayException $exception) {
++            Log::warning('Installed academic interface action failed.', [
++                'module' => $module['key'],
++                'action' => $action,
++                'rpc' => $exception->rpc,
++                'status_code' => $exception->statusCode,
++            ]);
++
++            return back()->withInput()->with('academic_error', [
++                'status' => $exception->statusCode,
++                'rpc' => $exception->rpc,
++                'message' => $this->friendlyStatus($exception),
++            ]);
++        }
++
++        foreach (($step['payload'] ?? []) as $field => $template) {
++            if (is_string($template) && preg_match('/^\{([a-z0-9_]+)\}$/', $template, $matches) === 1) {
++                $context[$matches[1]] = $payload[$field] ?? '';
++            }
++        }
++
++        foreach (($step['capture'] ?? []) as $contextKey => $path) {
++            $captured = data_get($result, $path);
++
++            if (is_scalar($captured) && (string) $captured !== '') {
++                $context[$contextKey] = $captured;
++            }
++        }
++
++        $request->session()->put([
++            'academic.interface.context' => $context,
++            "academic.interface.completed.{$action}" => now()->toIso8601String(),
++            'academic.interface.last_result' => [
++                'action' => $action,
++                'title' => (string) $step['title'],
++                'rpc' => (string) $step['rpc'],
++                'payload' => $this->redact($payload),
++                'response' => $this->redact($result),
++            ],
++        ]);
++
++        return back()->with('academic_success', "Acción {$step['title']} ejecutada correctamente.");
++    }
++
++    public function reset(Request $request): RedirectResponse
++    {
++        $request->session()->forget([
++            'academic.interface.context',
++            'academic.interface.completed',
++            'academic.interface.last_result',
++        ]);
++
++        return redirect()->route('academic.interface')->with('academic_success', 'Contexto reiniciado.');
++    }
++
++    /** @return array<string, mixed> */
++    private function module(): array
++    {
++        $module = config('academic-module');
++
++        if (! is_array($module) || ! isset($module['key'], $module['actions'])) {
++            abort(500, 'The academic interface module is not installed.');
++        }
++
++        return $module;
++    }
++
++    /**
++     * @param  array<string, mixed>  $module
++     * @return array<string, bool|float|int|string>
++     */
++    private function context(Request $request, array $module): array
++    {
++        $defaults = is_array($module['context_defaults'] ?? null) ? $module['context_defaults'] : [];
++        $identity = $this->identity($request);
++        $sessionContext = [
++            'session_user_id' => $identity['user_id'],
++            'session_identifier' => $identity['identifier'],
++            'session_email' => $identity['email'],
++            'session_role' => $identity['role'],
++        ];
++        $stored = $request->session()->get('academic.interface.context', []);
++        $stored = is_array($stored) ? $stored : [];
++
++        /** @var array<string, bool|float|int|string> $context */
++        $context = array_merge($sessionContext, $defaults, $stored);
++
++        if (($context['flow_id'] ?? '') === '') {
++            $context['flow_id'] = now('UTC')->format('YmdHis');
++            $request->session()->put('academic.interface.context', $context);
++        }
++
++        return $context;
++    }
++
++    /**
++     * @param  array<string, mixed>  $payload
++     * @param  array<string, bool|float|int|string>  $context
++     * @return array<string, mixed>
++     */
++    private function resolvePayload(array $payload, array $context): array
++    {
++        $replace = [];
++
++        foreach ($context as $key => $value) {
++            $replace['{'.$key.'}'] = (string) $value;
++        }
++
++        return Arr::map($payload, static fn (mixed $value): mixed => is_string($value)
++            ? strtr($value, $replace)
++            : $value);
++    }
++
++    /** @return array{user_id: string, identifier: string, email: string, role: string} */
++    private function identity(Request $request): array
++    {
++        $session = config('academic-interface.session');
++        $session = is_array($session) ? $session : [];
++
++        return [
++            'user_id' => (string) $request->session()->get((string) ($session['user_id'] ?? ''), ''),
++            'identifier' => (string) $request->session()->get((string) ($session['identifier'] ?? ''), ''),
++            'email' => (string) $request->session()->get((string) ($session['email'] ?? ''), ''),
++            'role' => (string) $request->session()->get((string) ($session['role'] ?? ''), ''),
++        ];
++    }
++
++    /** @param  array<string, mixed>  $step */
++    private function roleAllowed(Request $request, array $step): bool
++    {
++        $roles = $step['roles'] ?? [];
++
++        if (! is_array($roles) || $roles === []) {
++            return true;
++        }
++
++        $current = strtolower((string) $request->session()->get(
++            (string) config('academic-interface.session.role'),
++            '',
++        ));
++
++        return in_array($current, array_map(static fn (mixed $role): string => strtolower((string) $role), $roles), true);
++    }
++
++    /**
++     * @param  array<string, mixed>  $value
++     * @return array<string, mixed>
++     */
++    private function redact(array $value): array
++    {
++        $sensitive = ['password', 'temporary_password', 'newPassword', 'token', 'accessToken', 'refreshToken'];
++
++        foreach ($value as $key => $item) {
++            if (in_array((string) $key, $sensitive, true)) {
++                $value[$key] = '[redacted]';
++            } elseif (is_array($item)) {
++                $value[$key] = $this->redact($item);
++            }
++        }
++
++        return $value;
++    }
++
++    private function friendlyStatus(AcademicGatewayException $exception): string
++    {
++        $label = match ($exception->statusCode) {
++            3 => 'Argumento inválido',
++            5 => 'Registro no encontrado',
++            6 => 'El registro ya existe',
++            7 => 'Permiso denegado',
++            12 => 'RPC no publicado o no instalado',
++            14 => 'Servicio temporalmente no disponible',
++            16 => 'Sesión no autenticada o expirada',
++            default => 'El gateway rechazó la operación',
++        };
++
++        return "{$label}. Código gRPC {$exception->statusCode}.";
++    }
+ }
+diff --git a/app/Http/Controllers/AcademicSessionController.php b/app/Http/Controllers/AcademicSessionController.php
+index 607a6d7..ae2f562 100644
+--- a/app/Http/Controllers/AcademicSessionController.php
++++ b/app/Http/Controllers/AcademicSessionController.php
+@@ -2,9 +2,237 @@
+ 
+ namespace App\Http\Controllers;
+ 
++use App\Contracts\AcademicGateway;
++use App\Exceptions\AcademicGatewayException;
++use Illuminate\Http\RedirectResponse;
+ use Illuminate\Http\Request;
++use Illuminate\Support\Facades\Log;
++use Illuminate\Validation\Rules\Password;
++use Illuminate\View\View;
++use Throwable;
+ 
+ class AcademicSessionController extends Controller
+ {
+-    //
++    public function __construct(private readonly AcademicGateway $gateway) {}
++
++    public function loginForm(Request $request): View|RedirectResponse
++    {
++        if ($this->accessToken($request) !== '') {
++            return redirect()->route('academic.interface');
++        }
++
++        return view('academic-interface::login');
++    }
++
++    public function login(Request $request): RedirectResponse
++    {
++        /** @var array{username: string, password: string} $validated */
++        $validated = $request->validate([
++            'username' => ['required', 'string', 'max:255'],
++            'password' => ['required', 'string', 'max:5000'],
++        ]);
++
++        try {
++            $session = $this->gateway->invoke('auth.v1.AuthService/Login', [
++                'username' => trim($validated['username']),
++                'password' => $validated['password'],
++                'appVersion' => (string) config('academic-interface.app_version'),
++                'passwordEncoding' => (string) config('academic-interface.password_encoding'),
++            ]);
++
++            $accessToken = (string) ($session['accessToken'] ?? '');
++            $refreshToken = (string) ($session['refreshToken'] ?? '');
++
++            if ($accessToken === '' || $refreshToken === '') {
++                throw new AcademicGatewayException('auth.v1.AuthService/Login', 2, 'The response omitted session tokens.');
++            }
++
++            $identity = $this->validateIdentity($accessToken);
++            $this->storeSession($request, $session, $identity);
++        } catch (AcademicGatewayException $exception) {
++            Log::notice('Academic interface login failed.', [
++                'rpc' => $exception->rpc,
++                'status_code' => $exception->statusCode,
++            ]);
++
++            return back()->withInput($request->except('password'))->withErrors([
++                'username' => $exception->isAuthenticationFailure()
++                    ? 'Las credenciales no son válidas.'
++                    : 'El servicio de autenticación no está disponible.',
++            ]);
++        }
++
++        return redirect()->route('academic.interface');
++    }
++
++    public function refresh(Request $request): RedirectResponse
++    {
++        $refreshToken = (string) $request->session()->get($this->sessionKey('refresh_token'), '');
++
++        if ($refreshToken === '') {
++            return $this->clearAndRedirect($request, 'La sesión no tiene refresh token.');
++        }
++
++        try {
++            $session = $this->gateway->invoke('auth.v1.AuthService/RefreshToken', [
++                'refreshToken' => $refreshToken,
++            ]);
++            $session['refreshToken'] = (string) ($session['refreshToken'] ?? $refreshToken);
++            $accessToken = (string) ($session['accessToken'] ?? '');
++
++            if ($accessToken === '') {
++                throw new AcademicGatewayException('auth.v1.AuthService/RefreshToken', 2, 'The response omitted the access token.');
++            }
++
++            $this->storeSession($request, $session, $this->validateIdentity($accessToken));
++        } catch (AcademicGatewayException) {
++            return $this->clearAndRedirect($request, 'La sesión no pudo renovarse. Inicia sesión nuevamente.');
++        }
++
++        return back()->with('academic_success', 'La sesión del gateway fue renovada.');
++    }
++
++    public function logout(Request $request): RedirectResponse
++    {
++        $accessToken = $this->accessToken($request);
++        $refreshToken = (string) $request->session()->get($this->sessionKey('refresh_token'), '');
++
++        try {
++            if ($accessToken !== '' || $refreshToken !== '') {
++                $this->gateway->invoke('auth.v1.AuthService/Logout', [
++                    'token' => $accessToken,
++                    'refreshToken' => $refreshToken,
++                ], $accessToken);
++            }
++        } catch (Throwable $exception) {
++            Log::warning('Remote academic logout failed; local session will still be invalidated.', [
++                'exception' => $exception::class,
++            ]);
++        }
++
++        $request->session()->invalidate();
++        $request->session()->regenerateToken();
++
++        return redirect()->route('academic.login')->with('status', 'Sesión cerrada.');
++    }
++
++    public function forgotForm(): View
++    {
++        return view('academic-interface::forgot-password');
++    }
++
++    public function sendResetLink(Request $request): RedirectResponse
++    {
++        /** @var array{email: string} $validated */
++        $validated = $request->validate([
++            'email' => ['required', 'email:rfc', 'max:255'],
++        ]);
++
++        try {
++            $this->gateway->invoke('auth.v1.AuthService/ForgotPassword', [
++                'email' => strtolower(trim($validated['email'])),
++            ]);
++        } catch (AcademicGatewayException $exception) {
++            Log::warning('Academic password reset request failed.', [
++                'rpc' => $exception->rpc,
++                'status_code' => $exception->statusCode,
++            ]);
++        }
++
++        return back()->with('status', 'Si la cuenta existe, recibirás las instrucciones de recuperación.');
++    }
++
++    public function resetForm(Request $request): View
++    {
++        return view('academic-interface::reset-password', [
++            'token' => (string) $request->query('token', ''),
++            'email' => (string) $request->query('email', ''),
++        ]);
++    }
++
++    public function resetPassword(Request $request): RedirectResponse
++    {
++        /** @var array{token: string, email: string, password: string} $validated */
++        $validated = $request->validate([
++            'token' => ['required', 'string', 'max:5000'],
++            'email' => ['required', 'email:rfc', 'max:255'],
++            'password' => ['required', 'confirmed', Password::defaults()],
++        ]);
++
++        try {
++            $this->gateway->invoke('auth.v1.AuthService/ResetPassword', [
++                'token' => $validated['token'],
++                'email' => strtolower(trim($validated['email'])),
++                'newPassword' => $validated['password'],
++                'passwordEncoding' => (string) config('academic-interface.password_encoding'),
++            ]);
++        } catch (AcademicGatewayException $exception) {
++            return back()->withInput($request->except('password', 'password_confirmation'))->withErrors([
++                'email' => 'No fue posible restablecer la contraseña: '.$this->friendlyStatus($exception),
++            ]);
++        }
++
++        return redirect()->route('academic.login')->with('status', 'Contraseña actualizada.');
++    }
++
++    /** @return array<string, mixed> */
++    private function validateIdentity(string $accessToken): array
++    {
++        $identity = $this->gateway->invoke('auth.v1.AuthService/ValidateToken', [
++            'token' => $accessToken,
++        ]);
++
++        if (! (bool) ($identity['isValid'] ?? false)) {
++            throw new AcademicGatewayException('auth.v1.AuthService/ValidateToken', 16, 'The issued token is not valid.');
++        }
++
++        return $identity;
++    }
++
++    /**
++     * @param  array<string, mixed>  $session
++     * @param  array<string, mixed>  $identity
++     */
++    private function storeSession(Request $request, array $session, array $identity): void
++    {
++        $request->session()->regenerate();
++        $request->session()->put([
++            $this->sessionKey('access_token') => (string) ($session['accessToken'] ?? ''),
++            $this->sessionKey('refresh_token') => (string) ($session['refreshToken'] ?? ''),
++            $this->sessionKey('session_id') => (string) ($session['sessionId'] ?? $identity['sessionId'] ?? ''),
++            $this->sessionKey('user_id') => (string) ($identity['userId'] ?? ''),
++            $this->sessionKey('identifier') => (string) ($identity['identifier'] ?? ''),
++            $this->sessionKey('email') => (string) ($identity['email'] ?? ''),
++            $this->sessionKey('role') => (string) ($identity['role'] ?? ''),
++        ]);
++    }
++
++    private function accessToken(Request $request): string
++    {
++        return (string) $request->session()->get($this->sessionKey('access_token'), '');
++    }
++
++    private function sessionKey(string $key): string
++    {
++        return (string) config("academic-interface.session.{$key}");
++    }
++
++    private function clearAndRedirect(Request $request, string $message): RedirectResponse
++    {
++        $request->session()->invalidate();
++        $request->session()->regenerateToken();
++
++        return redirect()->route('academic.login')->withErrors(['username' => $message]);
++    }
++
++    private function friendlyStatus(AcademicGatewayException $exception): string
++    {
++        return match ($exception->statusCode) {
++            3 => 'datos inválidos',
++            5 => 'token o cuenta no encontrados',
++            14 => 'servicio no disponible',
++            16 => 'token inválido o expirado',
++            default => 'respuesta gRPC '.$exception->statusCode,
++        };
++    }
+ }
+diff --git a/app/Http/Middleware/EnsureAcademicGatewaySession.php b/app/Http/Middleware/EnsureAcademicGatewaySession.php
+index 6d475ba..f2885a7 100644
+--- a/app/Http/Middleware/EnsureAcademicGatewaySession.php
++++ b/app/Http/Middleware/EnsureAcademicGatewaySession.php
+@@ -3,18 +3,26 @@
+ namespace App\Http\Middleware;
+ 
+ use Closure;
++use Illuminate\Http\RedirectResponse;
+ use Illuminate\Http\Request;
+ use Symfony\Component\HttpFoundation\Response;
+ 
+ class EnsureAcademicGatewaySession
+ {
+-    /**
+-     * Handle an incoming request.
+-     *
+-     * @param  Closure(Request): (Response)  $next
+-     */
+-    public function handle(Request $request, Closure $next): Response
++    /** @param  Closure(Request): Response  $next */
++    public function handle(Request $request, Closure $next): Response|RedirectResponse
+     {
++        $accessToken = (string) $request->session()->get(
++            (string) config('academic-interface.session.access_token'),
++            '',
++        );
++
++        if ($accessToken === '') {
++            return redirect()->route('academic.login')->withErrors([
++                'username' => 'Inicia sesión para usar la interfaz académica.',
++            ]);
++        }
++
+         return $next($request);
+     }
+ }
+diff --git a/app/Providers/AcademicInterfaceServiceProvider.php b/app/Providers/AcademicInterfaceServiceProvider.php
+index 797b877..5f8087a 100644
+--- a/app/Providers/AcademicInterfaceServiceProvider.php
++++ b/app/Providers/AcademicInterfaceServiceProvider.php
+@@ -2,23 +2,41 @@
+ 
+ namespace App\Providers;
+ 
++use App\Contracts\AcademicGateway;
++use App\Services\GrpcAcademicGateway;
+ use Illuminate\Support\ServiceProvider;
+ 
+ class AcademicInterfaceServiceProvider extends ServiceProvider
+ {
+-    /**
+-     * Register services.
+-     */
+     public function register(): void
+     {
+-        //
++        $this->mergeConfigFrom(config_path('academic-interface.php'), 'academic-interface');
++        $this->mergeConfigFrom(config_path('academic-module.php'), 'academic-module');
++
++        $this->app->singleton(AcademicGateway::class, function (): GrpcAcademicGateway {
++            $coreClients = config('academic-interface.clients', []);
++            $moduleClients = config('academic-module.clients', []);
++            $coreRpcs = config('academic-interface.rpcs', []);
++            $moduleRpcs = config('academic-module.rpcs', []);
++
++            return new GrpcAcademicGateway(
++                host: (string) config('academic-interface.host'),
++                timeoutMs: (int) config('academic-interface.timeout_ms'),
++                tls: (bool) config('academic-interface.tls'),
++                clients: array_merge(
++                    is_array($coreClients) ? $coreClients : [],
++                    is_array($moduleClients) ? $moduleClients : [],
++                ),
++                rpcs: array_merge(
++                    is_array($coreRpcs) ? $coreRpcs : [],
++                    is_array($moduleRpcs) ? $moduleRpcs : [],
++                ),
++            );
++        });
+     }
+ 
+-    /**
+-     * Bootstrap services.
+-     */
+     public function boot(): void
+     {
+-        //
++        $this->loadViewsFrom(resource_path('views/academic-interface'), 'academic-interface');
+     }
+ }
+diff --git a/app/Services/GrpcAcademicGateway.php b/app/Services/GrpcAcademicGateway.php
+index e36f22b..592345f 100644
+--- a/app/Services/GrpcAcademicGateway.php
++++ b/app/Services/GrpcAcademicGateway.php
+@@ -2,13 +2,129 @@
+ 
+ namespace App\Services;
+ 
+-class GrpcAcademicGateway
++use App\Contracts\AcademicGateway;
++use App\Exceptions\AcademicGatewayException;
++use Google\Protobuf\Internal\Message;
++use Grpc\BaseStub;
++use Grpc\ChannelCredentials;
++use JsonException;
++use Throwable;
++
++class GrpcAcademicGateway implements AcademicGateway
+ {
++    /** @var array<string, BaseStub> */
++    private array $instances = [];
++
+     /**
+-     * Create a new class instance.
++     * @param  array<string, class-string<BaseStub>>  $clients
++     * @param  array<string, array{client: string, method: string, request: class-string<Message>, authenticated?: bool}>  $rpcs
+      */
+-    public function __construct()
++    public function __construct(
++        private readonly string $host,
++        int $timeoutMs,
++        private readonly bool $tls,
++        private readonly array $clients,
++        private readonly array $rpcs,
++    ) {
++        $this->timeoutMicros = max(1, $timeoutMs) * 1000;
++    }
++
++    private readonly int $timeoutMicros;
++
++    public function invoke(string $rpc, array $payload = [], string $accessToken = ''): array
++    {
++        $definition = $this->rpcs[$rpc] ?? null;
++
++        if (! is_array($definition)) {
++            throw new AcademicGatewayException($rpc, 12, 'The installed interface does not expose this RPC.');
++        }
++
++        $requestClass = $definition['request'];
++
++        if (! class_exists($requestClass) || ! is_a($requestClass, Message::class, true)) {
++            throw new AcademicGatewayException($rpc, 12, "Generated request class {$requestClass} is not installed.");
++        }
++
++        /** @var Message $request */
++        $request = new $requestClass;
++
++        try {
++            $request->mergeFromJsonString(json_encode($payload, JSON_THROW_ON_ERROR));
++        } catch (Throwable $exception) {
++            throw new AcademicGatewayException($rpc, 3, 'The request payload is invalid.', $exception);
++        }
++
++        $client = $this->client($definition['client'], $rpc);
++        $method = $definition['method'];
++
++        if (! is_callable([$client, $method])) {
++            throw new AcademicGatewayException($rpc, 12, "Generated client method {$method} is not installed.");
++        }
++
++        try {
++            $call = $client->{$method}(
++                $request,
++                $this->authorization($accessToken),
++                ['timeout' => $this->timeoutMicros],
++            );
++            [$response, $status] = $call->wait();
++        } catch (AcademicGatewayException $exception) {
++            throw $exception;
++        } catch (Throwable $exception) {
++            throw new AcademicGatewayException($rpc, 14, 'The gateway could not be reached.', $exception);
++        }
++
++        $statusCode = (int) ($status->code ?? 2);
++
++        if ($statusCode !== 0) {
++            throw new AcademicGatewayException(
++                $rpc,
++                $statusCode,
++                (string) ($status->details ?? 'Unknown error.'),
++            );
++        }
++
++        if (! $response instanceof Message) {
++            throw new AcademicGatewayException($rpc, 2, 'The gateway returned an unexpected response.');
++        }
++
++        try {
++            $decoded = json_decode($response->serializeToJsonString(), true, 512, JSON_THROW_ON_ERROR);
++        } catch (JsonException $exception) {
++            throw new AcademicGatewayException($rpc, 2, 'The gateway response could not be decoded.', $exception);
++        }
++
++        return is_array($decoded) ? $decoded : [];
++    }
++
++    private function client(string $alias, string $rpc): BaseStub
++    {
++        if (isset($this->instances[$alias])) {
++            return $this->instances[$alias];
++        }
++
++        $clientClass = $this->clients[$alias] ?? null;
++
++        if (! is_string($clientClass) || ! class_exists($clientClass) || ! is_a($clientClass, BaseStub::class, true)) {
++            throw new AcademicGatewayException($rpc, 12, "Generated client {$alias} is not installed.");
++        }
++
++        $credentials = $this->tls
++            ? ChannelCredentials::createSsl()
++            : ChannelCredentials::createInsecure();
++
++        /** @var BaseStub $client */
++        $client = new $clientClass($this->host, ['credentials' => $credentials]);
++        $this->instances[$alias] = $client;
++
++        return $client;
++    }
++
++    /** @return array<string, list<string>> */
++    private function authorization(string $accessToken): array
+     {
+-        //
++        return $accessToken === ''
++            ? []
++            : ['authorization' => ['Bearer '.$accessToken]];
+     }
+ }
+diff --git a/config/academic-interface.php b/config/academic-interface.php
+index 3ac44ad..636d5f3 100644
+--- a/config/academic-interface.php
++++ b/config/academic-interface.php
+@@ -1,5 +1,99 @@
+ <?php
+ 
++use App\Grpc\Auth\V1\AuthServiceClient;
++use App\Grpc\Auth\V1\ForgotPasswordRequest;
++use App\Grpc\Auth\V1\HealthServiceClient;
++use App\Grpc\Auth\V1\LoginRequest;
++use App\Grpc\Auth\V1\LogoutRequest;
++use App\Grpc\Auth\V1\PBEmpty;
++use App\Grpc\Auth\V1\RefreshTokenRequest;
++use App\Grpc\Auth\V1\ResetPasswordRequest;
++use App\Grpc\Auth\V1\ValidateTokenRequest;
++use App\Grpc\Auth\V1\WhitelistServiceClient;
++
+ return [
+-    //
++    'host' => env('GATEWAY_GRPC_HOST', 'academia-dev.eastus2.cloudapp.azure.com:50050'),
++    'timeout_ms' => (int) env('GATEWAY_GRPC_TIMEOUT_MS', 10000),
++    'tls' => filter_var(env('GATEWAY_GRPC_TLS', false), FILTER_VALIDATE_BOOL),
++    'app_version' => env('GATEWAY_APP_VERSION', 'academic-interface'),
++    'password_encoding' => env('GATEWAY_PASSWORD_ENCODING', 'plain'),
++
++    'session' => [
++        'access_token' => 'academic.gateway.access_token',
++        'refresh_token' => 'academic.gateway.refresh_token',
++        'session_id' => 'academic.gateway.session_id',
++        'user_id' => 'academic.gateway.user_id',
++        'identifier' => 'academic.gateway.identifier',
++        'email' => 'academic.gateway.email',
++        'role' => 'academic.gateway.role',
++    ],
++
++    'clients' => [
++        'auth' => AuthServiceClient::class,
++        'auth_health' => HealthServiceClient::class,
++        'auth_whitelist' => WhitelistServiceClient::class,
++    ],
++
++    'rpcs' => [
++        'auth.v1.AuthService/Login' => [
++            'client' => 'auth', 'method' => 'Login',
++            'request' => LoginRequest::class,
++            'authenticated' => false,
++        ],
++        'auth.v1.AuthService/RefreshToken' => [
++            'client' => 'auth', 'method' => 'RefreshToken',
++            'request' => RefreshTokenRequest::class,
++            'authenticated' => false,
++        ],
++        'auth.v1.AuthService/ForgotPassword' => [
++            'client' => 'auth', 'method' => 'ForgotPassword',
++            'request' => ForgotPasswordRequest::class,
++            'authenticated' => false,
++        ],
++        'auth.v1.AuthService/ResetPassword' => [
++            'client' => 'auth', 'method' => 'ResetPassword',
++            'request' => ResetPasswordRequest::class,
++            'authenticated' => false,
++        ],
++        'auth.v1.AuthService/ValidateToken' => [
++            'client' => 'auth', 'method' => 'ValidateToken',
++            'request' => ValidateTokenRequest::class,
++            'authenticated' => false,
++        ],
++        'auth.v1.AuthService/ValidateTokenSimple' => [
++            'client' => 'auth', 'method' => 'ValidateTokenSimple',
++            'request' => ValidateTokenRequest::class,
++            'authenticated' => false,
++        ],
++        'auth.v1.AuthService/ValidateTokenWithHeader' => [
++            'client' => 'auth', 'method' => 'ValidateTokenWithHeader',
++            'request' => PBEmpty::class,
++            'authenticated' => true,
++        ],
++        'auth.v1.AuthService/Logout' => [
++            'client' => 'auth', 'method' => 'Logout',
++            'request' => LogoutRequest::class,
++            'authenticated' => true,
++        ],
++        'auth.v1.WhitelistService/GetAll' => [
++            'client' => 'auth_whitelist', 'method' => 'GetAll',
++            'request' => PBEmpty::class,
++            'authenticated' => true,
++        ],
++        'auth.v1.HealthService/Health' => [
++            'client' => 'auth_health', 'method' => 'Health',
++            'request' => PBEmpty::class,
++            'authenticated' => false,
++        ],
++        'auth.v1.HealthService/Ready' => [
++            'client' => 'auth_health', 'method' => 'Ready',
++            'request' => PBEmpty::class,
++            'authenticated' => false,
++        ],
++        'auth.v1.HealthService/Live' => [
++            'client' => 'auth_health', 'method' => 'Live',
++            'request' => PBEmpty::class,
++            'authenticated' => false,
++        ],
++    ],
+ ];
+diff --git a/resources/views/academic-interface/forgot-password.blade.php b/resources/views/academic-interface/forgot-password.blade.php
+index 9efb7b6..e4b766c 100644
+--- a/resources/views/academic-interface/forgot-password.blade.php
++++ b/resources/views/academic-interface/forgot-password.blade.php
+@@ -1,3 +1,15 @@
+-<div>
+-    <!-- Normalized Laravel view stub. -->
+-</div>
++<x-layouts::auth title="Recuperar contraseña">
++    <div class="flex flex-col gap-6">
++        <x-auth-header title="Recuperar contraseña" description="El gateway enviará el enlace al correo indicado" />
++        <x-auth-session-status class="text-center" :status="session('status')" />
++
++        <form method="POST" action="{{ route('academic.password.email') }}" class="flex flex-col gap-6">
++            @csrf
++            <flux:input name="email" label="Correo" type="email" :value="old('email')" required autofocus />
++            <flux:error name="email" />
++            <flux:button variant="primary" type="submit" class="w-full">Solicitar enlace</flux:button>
++        </form>
++
++        <flux:link :href="route('academic.login')" class="text-center">Volver al login</flux:link>
++    </div>
++</x-layouts::auth>
+diff --git a/resources/views/academic-interface/interface.blade.php b/resources/views/academic-interface/interface.blade.php
+index 9efb7b6..beb3352 100644
+--- a/resources/views/academic-interface/interface.blade.php
++++ b/resources/views/academic-interface/interface.blade.php
+@@ -1,3 +1,123 @@
+-<div>
+-    <!-- Normalized Laravel view stub. -->
+-</div>
++@extends('academic-interface::layout', ['title' => $module['short_title']])
++
++@section('content')
++    <div class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6" data-test="academic-interface" data-module="{{ $module['key'] }}">
++        <header class="rounded-3xl bg-zinc-950 p-7 text-white">
++            <div class="flex flex-col justify-between gap-5 lg:flex-row lg:items-start">
++                <div>
++                    <p class="text-xs font-bold uppercase tracking-[0.2em] text-sky-300">Módulo independiente</p>
++                    <h1 class="mt-2 text-3xl font-semibold">{{ $module['title'] }}</h1>
++                    <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-300">{{ $module['description'] }}</p>
++                </div>
++                <div class="flex flex-wrap gap-2 text-xs">
++                    <span class="rounded-full bg-white/10 px-3 py-2">{{ $identity['email'] ?: $identity['identifier'] }}</span>
++                    <span class="rounded-full bg-white/10 px-3 py-2">{{ $identity['role'] ?: 'rol no informado' }}</span>
++                </div>
++            </div>
++
++            <div class="mt-6 flex flex-wrap gap-3">
++                <form method="POST" action="{{ route('academic.session.refresh') }}">@csrf
++                    <flux:button type="submit" variant="filled" icon="arrow-path">Renovar sesión</flux:button>
++                </form>
++                <form method="POST" action="{{ route('academic.interface.reset') }}">@csrf @method('DELETE')
++                    <flux:button type="submit" variant="filled" icon="trash">Reiniciar contexto</flux:button>
++                </form>
++                <form method="POST" action="{{ route('academic.logout') }}">@csrf
++                    <flux:button type="submit" variant="danger" icon="arrow-right-start-on-rectangle">Cerrar sesión</flux:button>
++                </form>
++            </div>
++        </header>
++
++        @if (session('academic_success'))
++            <div data-test="academic-success" class="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-emerald-950">{{ session('academic_success') }}</div>
++        @endif
++
++        @if (session('academic_error'))
++            <div data-test="academic-error" data-status="{{ session('academic_error.status') }}" class="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-rose-950">
++                <p class="font-semibold">{{ session('academic_error.message') }}</p>
++                <p class="mt-1 font-mono text-xs">{{ session('academic_error.rpc') }}</p>
++            </div>
++        @endif
++
++        <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
++            <main class="space-y-4">
++                @foreach ($actions as $key => $action)
++                    @php($optional = $action['optional'] ?? [])
++                    <details class="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900" data-action="{{ $key }}">
++                        <summary class="cursor-pointer list-none p-5">
++                            <div class="flex items-start justify-between gap-4">
++                                <div>
++                                    <p class="text-xs font-bold uppercase tracking-wider text-sky-600">{{ $action['rpc'] }}</p>
++                                    <h2 class="mt-1 text-lg font-semibold">{{ $action['title'] }}</h2>
++                                    <p class="mt-1 text-sm text-zinc-500">{{ $action['description'] }}</p>
++                                </div>
++                                @if ($action['completed_at'])
++                                    <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Ejecutado</span>
++                                @endif
++                            </div>
++                        </summary>
++
++                        <form method="POST" action="{{ route('academic.interface.execute', $key) }}" class="border-t border-zinc-200 p-5 dark:border-zinc-700">
++                            @csrf
++                            <div class="grid gap-4 md:grid-cols-2">
++                                @foreach (($action['payload'] ?? []) as $field => $default)
++                                    @php($type = $action['types'][$field] ?? 'string')
++                                    @php($value = old("payload.{$field}", $default))
++                                    <label class="flex flex-col gap-1.5 {{ $type === 'textarea' ? 'md:col-span-2' : '' }}">
++                                        <span class="text-sm font-medium">{{ str($field)->replace('_', ' ') }} @if (in_array($field, $optional, true)) <small>(opcional)</small> @endif</span>
++                                        @if ($type === 'textarea')
++                                            <textarea name="payload[{{ $field }}]" rows="4" @required(! in_array($field, $optional, true)) class="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950">{{ $value }}</textarea>
++                                        @elseif ($type === 'boolean')
++                                            <span class="flex min-h-11 items-center gap-3 rounded-xl border border-zinc-300 px-3 dark:border-zinc-700">
++                                                <input type="hidden" name="payload[{{ $field }}]" value="0">
++                                                <input type="checkbox" name="payload[{{ $field }}]" value="1" @checked(filter_var($value, FILTER_VALIDATE_BOOL))>
++                                                <span class="text-sm">Verdadero</span>
++                                            </span>
++                                        @else
++                                            <input
++                                                name="payload[{{ $field }}]"
++                                                value="{{ $value }}"
++                                                type="{{ match ($type) { 'email', 'password', 'url', 'date' => $type, 'integer', 'number' => 'number', default => 'text' } }}"
++                                                @if ($type === 'number') step="any" @elseif ($type === 'integer') step="1" @endif
++                                                @required(! in_array($field, $optional, true))
++                                                autocomplete="off"
++                                                class="min-h-11 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
++                                            >
++                                        @endif
++                                        <flux:error name="payload.{{ $field }}" />
++                                    </label>
++                                @endforeach
++                            </div>
++
++                            <div class="mt-5 flex justify-end">
++                                <flux:button type="submit" variant="primary" icon="play">Ejecutar</flux:button>
++                            </div>
++                        </form>
++                    </details>
++                @endforeach
++            </main>
++
++            <aside class="space-y-5 xl:sticky xl:top-6 xl:self-start">
++                <section class="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-700 dark:bg-zinc-900">
++                    <h2 class="font-semibold">Contexto del módulo</h2>
++                    <dl class="mt-4 space-y-3">
++                        @forelse ($context as $key => $value)
++                            @if ($value !== '')
++                                <div><dt class="text-xs uppercase text-zinc-400">{{ str($key)->replace('_', ' ') }}</dt><dd class="break-all font-mono text-xs">{{ is_bool($value) ? ($value ? 'true' : 'false') : $value }}</dd></div>
++                            @endif
++                        @empty
++                            <p class="text-sm text-zinc-500">Este módulo no necesita contexto encadenado.</p>
++                        @endforelse
++                    </dl>
++                </section>
++
++                @if ($lastResult)
++                    <section class="overflow-hidden rounded-2xl bg-zinc-950 text-zinc-100">
++                        <div class="border-b border-white/10 p-4"><p class="text-sm font-semibold">{{ $lastResult['title'] }}</p></div>
++                        <pre data-test="academic-response" class="max-h-[32rem] overflow-auto p-4 text-xs"><code>{{ json_encode($lastResult['response'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) }}</code></pre>
++                    </section>
++                @endif
++            </aside>
++        </div>
++    </div>
++@endsection
+diff --git a/resources/views/academic-interface/layout.blade.php b/resources/views/academic-interface/layout.blade.php
+index 9efb7b6..b30d184 100644
+--- a/resources/views/academic-interface/layout.blade.php
++++ b/resources/views/academic-interface/layout.blade.php
+@@ -1,3 +1,10 @@
+-<div>
+-    <!-- Normalized Laravel view stub. -->
+-</div>
++<!DOCTYPE html>
++<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="dark">
++    <head>
++        @include('partials.head', ['title' => $title ?? config('academic-module.short_title')])
++    </head>
++    <body class="min-h-screen bg-zinc-100 p-4 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-100 sm:p-6">
++        @yield('content')
++        @fluxScripts
++    </body>
++</html>
+diff --git a/resources/views/academic-interface/login.blade.php b/resources/views/academic-interface/login.blade.php
+index 9efb7b6..04875ec 100644
+--- a/resources/views/academic-interface/login.blade.php
++++ b/resources/views/academic-interface/login.blade.php
+@@ -1,3 +1,43 @@
+-<div>
+-    <!-- Normalized Laravel view stub. -->
+-</div>
++<x-layouts::auth :title="'Acceso a '.config('academic-module.short_title', 'interfaz académica')">
++    <div class="flex flex-col gap-6" data-test="academic-login">
++        <x-auth-header
++            :title="'Acceso a '.config('academic-module.title', 'interfaz académica')"
++            description="Autenticación mediante academico-login y el gateway gRPC"
++        />
++
++        <x-auth-session-status class="text-center" :status="session('status')" />
++
++        <form method="POST" action="{{ route('academic.login.store') }}" class="flex flex-col gap-6">
++            @csrf
++
++            <flux:input
++                name="username"
++                label="Usuario o correo"
++                :value="old('username')"
++                type="text"
++                required
++                autofocus
++                autocomplete="username"
++            />
++            <flux:error name="username" />
++
++            <flux:input
++                name="password"
++                label="Contraseña"
++                type="password"
++                required
++                autocomplete="current-password"
++                viewable
++            />
++            <flux:error name="password" />
++
++            <flux:button variant="primary" type="submit" class="w-full" data-test="academic-login-button">
++                Iniciar sesión
++            </flux:button>
++        </form>
++
++        <div class="text-center text-sm">
++            <flux:link :href="route('academic.password.request')">¿Olvidaste tu contraseña?</flux:link>
++        </div>
++    </div>
++</x-layouts::auth>
+diff --git a/resources/views/academic-interface/reset-password.blade.php b/resources/views/academic-interface/reset-password.blade.php
+index 9efb7b6..1f7e9e8 100644
+--- a/resources/views/academic-interface/reset-password.blade.php
++++ b/resources/views/academic-interface/reset-password.blade.php
+@@ -1,3 +1,16 @@
+-<div>
+-    <!-- Normalized Laravel view stub. -->
+-</div>
++<x-layouts::auth title="Restablecer contraseña">
++    <div class="flex flex-col gap-6">
++        <x-auth-header title="Restablecer contraseña" description="Usa el token del enlace más reciente" />
++
++        <form method="POST" action="{{ route('academic.password.update') }}" class="flex flex-col gap-6">
++            @csrf
++            <input type="hidden" name="token" value="{{ old('token', $token) }}">
++            <flux:input name="email" label="Correo" type="email" :value="old('email', $email)" required />
++            <flux:error name="email" />
++            <flux:input name="password" label="Nueva contraseña" type="password" required viewable />
++            <flux:error name="password" />
++            <flux:input name="password_confirmation" label="Confirmar contraseña" type="password" required viewable />
++            <flux:button variant="primary" type="submit" class="w-full">Guardar contraseña</flux:button>
++        </form>
++    </div>
++</x-layouts::auth>
+diff --git a/routes/web.php b/routes/web.php
+index 12e932e..50b058f 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use App\Http\Controllers\AcademicInterfaceController;
++use App\Http\Controllers\AcademicSessionController;
++use App\Http\Middleware\EnsureAcademicGatewaySession;
+ use Illuminate\Support\Facades\Route;
+ 
+ Route::view('/', 'welcome')->name('home');
+@@ -9,3 +12,36 @@
+ });
+ 
+ require __DIR__.'/settings.php';
++
++$academicModuleSlug = trim((string) config('academic-module.slug', 'interfaz'), '/');
++
++Route::prefix('academico')->group(function () use ($academicModuleSlug): void {
++    Route::get('login', [AcademicSessionController::class, 'loginForm'])->name('academic.login');
++    Route::post('login', [AcademicSessionController::class, 'login'])
++        ->middleware('throttle:5,1')
++        ->name('academic.login.store');
++
++    Route::get('forgot-password', [AcademicSessionController::class, 'forgotForm'])
++        ->name('academic.password.request');
++    Route::post('forgot-password', [AcademicSessionController::class, 'sendResetLink'])
++        ->middleware('throttle:5,1')
++        ->name('academic.password.email');
++    Route::get('reset-password', [AcademicSessionController::class, 'resetForm'])
++        ->name('academic.password.reset');
++    Route::post('reset-password', [AcademicSessionController::class, 'resetPassword'])
++        ->middleware('throttle:5,1')
++        ->name('academic.password.update');
++
++    Route::middleware(EnsureAcademicGatewaySession::class)->group(function () use ($academicModuleSlug): void {
++        Route::get($academicModuleSlug, [AcademicInterfaceController::class, 'show'])
++            ->name('academic.interface');
++        Route::post("{$academicModuleSlug}/acciones/{action}", [AcademicInterfaceController::class, 'execute'])
++            ->name('academic.interface.execute');
++        Route::delete("{$academicModuleSlug}/contexto", [AcademicInterfaceController::class, 'reset'])
++            ->name('academic.interface.reset');
++        Route::post('session/refresh', [AcademicSessionController::class, 'refresh'])
++            ->name('academic.session.refresh');
++        Route::post('logout', [AcademicSessionController::class, 'logout'])
++            ->name('academic.logout');
++    });
++});
+diff --git a/tests/Feature/AcademicInterfaceTest.php b/tests/Feature/AcademicInterfaceTest.php
+index 6380e9a..ce91d52 100644
+--- a/tests/Feature/AcademicInterfaceTest.php
++++ b/tests/Feature/AcademicInterfaceTest.php
+@@ -2,19 +2,204 @@
+ 
+ namespace Tests\Feature;
+ 
+-use Illuminate\Foundation\Testing\RefreshDatabase;
+-use Illuminate\Foundation\Testing\WithFaker;
++use App\Contracts\AcademicGateway;
++use Closure;
+ use Tests\TestCase;
+ 
+ class AcademicInterfaceTest extends TestCase
+ {
+-    /**
+-     * A basic feature test example.
+-     */
+-    public function test_example(): void
++    protected function setUp(): void
+     {
+-        $response = $this->get('/');
++        parent::setUp();
+ 
+-        $response->assertStatus(200);
++        $this->withoutVite();
++    }
++
++    public function test_the_module_interface_requires_a_gateway_session(): void
++    {
++        $this->configureExampleModule();
++
++        $this->get(route('academic.interface'))
++            ->assertRedirect(route('academic.login'));
++    }
++
++    public function test_only_the_installed_module_actions_are_rendered(): void
++    {
++        $this->configureExampleModule();
++        $this->fakeGateway(static fn (): array => []);
++
++        $this->withGatewaySession()
++            ->get(route('academic.interface'))
++            ->assertOk()
++            ->assertSee('Interfaz de prueba')
++            ->assertSee('notificaciones.v1.NotificationService/CountUnread')
++            ->assertDontSee('usuarios.v1.UserManagementService');
++    }
++
++    public function test_every_action_from_the_installed_module_has_an_interface_form(): void
++    {
++        $module = config('academic-module');
++        $this->assertIsArray($module);
++        $this->fakeGateway(static fn (): array => []);
++
++        $response = $this->withGatewaySession()->get(route('academic.interface'));
++        $response->assertOk();
++
++        foreach (array_keys($module['actions'] ?? []) as $action) {
++            $response->assertSee('data-action="'.$action.'"', escape: false);
++        }
++    }
++
++    public function test_an_allow_listed_action_is_executed_and_its_result_is_captured(): void
++    {
++        $this->configureExampleModule();
++        $this->fakeGateway(function (string $rpc, array $payload, string $token): array {
++            $this->assertSame('notificaciones.v1.NotificationService/CountUnread', $rpc);
++            $this->assertSame(['usuario_id' => 'user-42'], $payload);
++            $this->assertSame('access-token', $token);
++
++            return ['unreadCount' => 7];
++        });
++
++        $this->withGatewaySession()
++            ->post(route('academic.interface.execute', 'count_unread'), [
++                'payload' => ['usuario_id' => 'user-42'],
++            ])
++            ->assertSessionHasNoErrors()
++            ->assertSessionHas('academic.interface.context.unread_count', 7)
++            ->assertSessionHas('academic.interface.completed.count_unread');
++    }
++
++    public function test_an_unknown_action_is_never_forwarded(): void
++    {
++        $this->configureExampleModule();
++        $this->fakeGateway(function (): never {
++            $this->fail('An action outside the installed allow list reached the gateway.');
++        });
++
++        $this->withGatewaySession()
++            ->post(route('academic.interface.execute', 'usuarios-create'))
++            ->assertNotFound();
++    }
++
++    public function test_login_keeps_remote_tokens_in_the_server_session(): void
++    {
++        $calls = [];
++        $this->fakeGateway(function (string $rpc, array $payload) use (&$calls): array {
++            $calls[] = $rpc;
++
++            return match ($rpc) {
++                'auth.v1.AuthService/Login' => [
++                    'accessToken' => 'issued-access-token',
++                    'refreshToken' => 'issued-refresh-token',
++                    'sessionId' => 'remote-session',
++                ],
++                'auth.v1.AuthService/ValidateToken' => [
++                    'isValid' => true,
++                    'userId' => 'user-42',
++                    'identifier' => '1000000000',
++                    'email' => 'student@example.edu',
++                    'role' => 'ESTUDIANTE',
++                ],
++                default => $this->fail("Unexpected RPC {$rpc}"),
++            };
++        });
++
++        $this->post(route('academic.login.store'), [
++            'username' => 'student@example.edu',
++            'password' => 'secret-value',
++        ])
++            ->assertRedirect(route('academic.interface'))
++            ->assertSessionHas('academic.gateway.access_token', 'issued-access-token')
++            ->assertSessionHas('academic.gateway.refresh_token', 'issued-refresh-token')
++            ->assertSessionHas('academic.gateway.user_id', 'user-42');
++
++        $this->assertSame([
++            'auth.v1.AuthService/Login',
++            'auth.v1.AuthService/ValidateToken',
++        ], $calls);
++    }
++
++    public function test_the_module_patch_does_not_register_other_business_domains(): void
++    {
++        $module = config('academic-module');
++        $this->assertIsArray($module);
++        $registeredRpcs = array_merge(
++            config('academic-interface.rpcs', []),
++            $module['rpcs'] ?? [],
++        );
++
++        $domain = match ($module['key'] ?? null) {
++            'academico-login' => 'auth.v1.',
++            'academico-usuarios' => 'usuarios.v1.',
++            'academico-matriculas' => 'matriculas.v1.',
++            'academico-calificaciones' => 'calificaciones.v1.',
++            'academico-solicitudes' => 'solicitudes.v1.',
++            'academico-notificaciones' => 'notificaciones.v1.',
++            default => $this->fail('The installed academic module is unknown.'),
++        };
++
++        foreach (array_keys($module['rpcs'] ?? []) as $rpc) {
++            $this->assertStringStartsWith($domain, $rpc);
++        }
++
++        foreach ($module['actions'] ?? [] as $action) {
++            $rpc = (string) ($action['rpc'] ?? '');
++            $this->assertArrayHasKey($rpc, $registeredRpcs);
++            $this->assertTrue(
++                str_starts_with($rpc, $domain) || str_starts_with($rpc, 'auth.v1.'),
++                "Unexpected RPC {$rpc} in {$module['key']}.",
++            );
++        }
++    }
++
++    private function configureExampleModule(): void
++    {
++        config()->set('academic-module', [
++            'key' => 'academico-notificaciones',
++            'slug' => 'notificaciones',
++            'title' => 'Interfaz de prueba',
++            'short_title' => 'Prueba',
++            'description' => 'Módulo aislado para la prueba de interfaz.',
++            'context_defaults' => [],
++            'clients' => [],
++            'rpcs' => [],
++            'actions' => [
++                'count_unread' => [
++                    'title' => 'Contar no leídas',
++                    'description' => 'Cuenta las notificaciones pendientes.',
++                    'rpc' => 'notificaciones.v1.NotificationService/CountUnread',
++                    'payload' => ['usuario_id' => '{session_user_id}'],
++                    'types' => [],
++                    'capture' => ['unread_count' => 'unreadCount'],
++                ],
++            ],
++        ]);
++    }
++
++    private function withGatewaySession(): self
++    {
++        return $this->withSession([
++            'academic.gateway.access_token' => 'access-token',
++            'academic.gateway.refresh_token' => 'refresh-token',
++            'academic.gateway.user_id' => 'user-42',
++            'academic.gateway.identifier' => '1000000000',
++            'academic.gateway.email' => 'student@example.edu',
++            'academic.gateway.role' => 'ESTUDIANTE',
++        ]);
++    }
++
++    /** @param  Closure(string, array<string, mixed>, string): array<string, mixed>  $handler */
++    private function fakeGateway(Closure $handler): void
++    {
++        $this->app->instance(AcademicGateway::class, new class($handler) implements AcademicGateway
++        {
++            public function __construct(private readonly Closure $handler) {}
++
++            public function invoke(string $rpc, array $payload = [], string $accessToken = ''): array
++            {
++                return ($this->handler)($rpc, $payload, $accessToken);
++            }
++        });
+     }
+ }

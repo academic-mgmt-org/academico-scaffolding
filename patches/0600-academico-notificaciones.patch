@@ -1,0 +1,45 @@
+diff --git a/config/academic-module.php b/config/academic-module.php
+index 3ac44ad..74f3d5e 100644
+--- a/config/academic-module.php
++++ b/config/academic-module.php
+@@ -1,5 +1,39 @@
+ <?php
+ 
+ return [
+-    //
++    'key' => 'academico-notificaciones',
++    'slug' => 'notificaciones',
++    'title' => 'Notificaciones académicas',
++    'short_title' => 'Notificaciones',
++    'description' => 'Consulta, creación, entrega por correo y gestión independiente de estados de lectura.',
++    'context_defaults' => ['notification_id' => ''],
++    'clients' => [
++        'notification_service' => 'App\\Grpc\\Notificaciones\\V1\\NotificationServiceClient',
++        'email_service' => 'App\\Grpc\\Notificaciones\\V1\\EmailServiceClient',
++        'health_service' => 'App\\Grpc\\Notificaciones\\V1\\HealthServiceClient',
++    ],
++    'rpcs' => [
++        'notificaciones.v1.NotificationService/ListNotifications' => ['client' => 'notification_service', 'method' => 'ListNotifications', 'request' => 'App\\Grpc\\Notificaciones\\V1\\ListNotificationsRequest', 'authenticated' => true],
++        'notificaciones.v1.NotificationService/RecentNotifications' => ['client' => 'notification_service', 'method' => 'RecentNotifications', 'request' => 'App\\Grpc\\Notificaciones\\V1\\ListNotificationsRequest', 'authenticated' => true],
++        'notificaciones.v1.NotificationService/CountUnread' => ['client' => 'notification_service', 'method' => 'CountUnread', 'request' => 'App\\Grpc\\Notificaciones\\V1\\CountUnreadRequest', 'authenticated' => true],
++        'notificaciones.v1.NotificationService/CreateNotification' => ['client' => 'notification_service', 'method' => 'CreateNotification', 'request' => 'App\\Grpc\\Notificaciones\\V1\\CreateNotificationRequest', 'authenticated' => true],
++        'notificaciones.v1.NotificationService/MarkAsRead' => ['client' => 'notification_service', 'method' => 'MarkAsRead', 'request' => 'App\\Grpc\\Notificaciones\\V1\\MarkReadRequest', 'authenticated' => true],
++        'notificaciones.v1.NotificationService/MarkAllAsRead' => ['client' => 'notification_service', 'method' => 'MarkAllAsRead', 'request' => 'App\\Grpc\\Notificaciones\\V1\\MarkAllReadRequest', 'authenticated' => true],
++        'notificaciones.v1.EmailService/SendEmail' => ['client' => 'email_service', 'method' => 'SendEmail', 'request' => 'App\\Grpc\\Notificaciones\\V1\\SendEmailRequest', 'authenticated' => true],
++        'notificaciones.v1.HealthService/Health' => ['client' => 'health_service', 'method' => 'Health', 'request' => 'App\\Grpc\\Notificaciones\\V1\\HealthRequest', 'authenticated' => false],
++        'notificaciones.v1.HealthService/Ready' => ['client' => 'health_service', 'method' => 'Ready', 'request' => 'App\\Grpc\\Notificaciones\\V1\\ReadyRequest', 'authenticated' => false],
++        'notificaciones.v1.HealthService/Live' => ['client' => 'health_service', 'method' => 'Live', 'request' => 'App\\Grpc\\Notificaciones\\V1\\LiveRequest', 'authenticated' => false],
++    ],
++    'actions' => [
++        'health' => ['title' => 'Salud de notificaciones', 'description' => 'Comprueba el estado general del microservicio.', 'rpc' => 'notificaciones.v1.HealthService/Health', 'payload' => [], 'capture' => [], 'types' => [], 'optional' => [], 'authenticated' => false],
++        'ready' => ['title' => 'Disponibilidad de notificaciones', 'description' => 'Comprueba que sus dependencias estén listas.', 'rpc' => 'notificaciones.v1.HealthService/Ready', 'payload' => [], 'capture' => [], 'types' => [], 'optional' => [], 'authenticated' => false],
++        'live' => ['title' => 'Proceso de notificaciones activo', 'description' => 'Comprueba que el proceso continúe vivo.', 'rpc' => 'notificaciones.v1.HealthService/Live', 'payload' => [], 'capture' => [], 'types' => [], 'optional' => [], 'authenticated' => false],
++        'count_unread' => ['title' => 'Contar no leídas', 'description' => 'Obtiene el contador para el usuario autenticado.', 'rpc' => 'notificaciones.v1.NotificationService/CountUnread', 'payload' => ['usuario_id' => '{session_user_id}'], 'capture' => ['unread_count' => 'unreadCount'], 'types' => [], 'optional' => []],
++        'list_unread' => ['title' => 'Listar no leídas', 'description' => 'Consulta la bandeja pendiente del usuario autenticado.', 'rpc' => 'notificaciones.v1.NotificationService/ListNotifications', 'payload' => ['usuario_id' => '{session_user_id}', 'estado' => 'no_leida', 'limit' => 20], 'capture' => [], 'types' => ['limit' => 'integer'], 'optional' => ['estado']],
++        'recent' => ['title' => 'Consultar recientes', 'description' => 'Carga las notificaciones más recientes.', 'rpc' => 'notificaciones.v1.NotificationService/RecentNotifications', 'payload' => ['usuario_id' => '{session_user_id}', 'estado' => '', 'limit' => 5], 'capture' => [], 'types' => ['limit' => 'integer'], 'optional' => ['estado']],
++        'create' => ['title' => 'Crear notificación', 'description' => 'Crea una comunicación académica para un usuario.', 'rpc' => 'notificaciones.v1.NotificationService/CreateNotification', 'payload' => ['usuario_id' => '{session_user_id}', 'email' => '{session_email}', 'identificacion' => '{session_identifier}', 'titulo' => 'Nueva notificación académica', 'mensaje' => 'Mensaje generado desde la interfaz independiente.', 'tipo' => 'informativa', 'canal' => 'web', 'prioridad' => 'normal', 'icon_id' => 'bell'], 'capture' => ['notification_id' => 'notification.id'], 'types' => ['email' => 'email', 'mensaje' => 'textarea'], 'optional' => ['email', 'identificacion', 'icon_id']],
++        'mark_read' => ['title' => 'Marcar como leída', 'description' => 'Actualiza una notificación individual.', 'rpc' => 'notificaciones.v1.NotificationService/MarkAsRead', 'payload' => ['id' => '{notification_id}', 'usuario_id' => '{session_user_id}'], 'capture' => [], 'types' => [], 'optional' => []],
++        'mark_all_read' => ['title' => 'Marcar todas como leídas', 'description' => 'Actualiza toda la bandeja del usuario.', 'rpc' => 'notificaciones.v1.NotificationService/MarkAllAsRead', 'payload' => ['usuario_id' => '{session_user_id}'], 'capture' => [], 'types' => [], 'optional' => []],
++        'send_email' => ['title' => 'Enviar correo', 'description' => 'Envía un correo sin acoplar la interfaz a otro dominio funcional.', 'rpc' => 'notificaciones.v1.EmailService/SendEmail', 'payload' => ['usuario_id' => '{session_user_id}', 'to_email' => '{session_email}', 'to_name' => '{session_identifier}', 'subject' => 'Comunicación académica', 'plain_text' => 'Mensaje enviado desde academico-notificaciones.', 'html' => '<p>Mensaje enviado desde <strong>academico-notificaciones</strong>.</p>', 'tipo' => 'informativa', 'prioridad' => 'normal', 'source' => 'academic-interface'], 'capture' => [], 'types' => ['to_email' => 'email', 'plain_text' => 'textarea', 'html' => 'textarea'], 'optional' => ['usuario_id', 'to_name', 'html']],
++    ],
+ ];

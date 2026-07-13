@@ -1,0 +1,27 @@
+diff --git a/config/academic-module.php b/config/academic-module.php
+index 3ac44ad..15f5909 100644
+--- a/config/academic-module.php
++++ b/config/academic-module.php
+@@ -1,5 +1,21 @@
+ <?php
+ 
+ return [
+-    //
++    'key' => 'academico-login',
++    'slug' => 'sesiones',
++    'title' => 'Autenticación y sesiones',
++    'short_title' => 'Sesiones',
++    'description' => 'Login, renovación, validación, recuperación de contraseña y cierre de la sesión remota.',
++    'context_defaults' => [],
++    'clients' => [
++    ],
++    'rpcs' => [
++    ],
++    'actions' => [
++        'health' => ['title' => 'Salud de autenticación', 'description' => 'Comprueba el estado general de academico-login.', 'rpc' => 'auth.v1.HealthService/Health', 'payload' => [], 'capture' => [], 'types' => [], 'optional' => [], 'authenticated' => false],
++        'ready' => ['title' => 'Disponibilidad de autenticación', 'description' => 'Comprueba que las dependencias estén listas.', 'rpc' => 'auth.v1.HealthService/Ready', 'payload' => [], 'capture' => [], 'types' => [], 'optional' => [], 'authenticated' => false],
++        'live' => ['title' => 'Proceso de autenticación activo', 'description' => 'Comprueba que el proceso continúe vivo.', 'rpc' => 'auth.v1.HealthService/Live', 'payload' => [], 'capture' => [], 'types' => [], 'optional' => [], 'authenticated' => false],
++        'validate_session' => ['title' => 'Validar sesión actual', 'description' => 'Valida el bearer token conservado en la sesión del servidor.', 'rpc' => 'auth.v1.AuthService/ValidateTokenWithHeader', 'payload' => [], 'capture' => [], 'types' => [], 'optional' => []],
++        'whitelist' => ['title' => 'Consultar reglas de acceso', 'description' => 'Recupera las rutas reutilizables autorizadas.', 'rpc' => 'auth.v1.WhitelistService/GetAll', 'payload' => [], 'capture' => [], 'types' => [], 'optional' => []],
++    ],
+ ];

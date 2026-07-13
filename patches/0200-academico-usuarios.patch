@@ -1,0 +1,61 @@
+diff --git a/config/academic-module.php b/config/academic-module.php
+index 3ac44ad..e420738 100644
+--- a/config/academic-module.php
++++ b/config/academic-module.php
+@@ -1,5 +1,55 @@
+ <?php
+ 
+ return [
+-    //
++    'key' => 'academico-usuarios',
++    'slug' => 'usuarios',
++    'title' => 'Alta y regularización de estudiante',
++    'short_title' => 'Usuarios',
++    'description' => 'Consulta estructura académica, crea a María Fernanda, actualiza sus datos y verifica baja lógica y reactivación.',
++    'context_defaults' => ['flow_id' => '', 'student_id' => '', 'student_email' => 'mfcastroi@utn.edu.ec', 'student_document' => '1004567890', 'student_career' => 'SOFT-001', 'student_faculty' => 'FICA'],
++    'clients' => [
++        'user_management_service' => 'App\\Grpc\\Usuarios\\V1\\UserManagementServiceClient',
++        'academic_structure_service' => 'App\\Grpc\\Usuarios\\V1\\AcademicStructureServiceClient',
++        'health_service' => 'App\\Grpc\\Usuarios\\V1\\HealthServiceClient',
++    ],
++    'rpcs' => [
++        'usuarios.v1.UserManagementService/CreateUser' => ['client' => 'user_management_service', 'method' => 'CreateUser', 'request' => 'App\\Grpc\\Usuarios\\V1\\CreateUserRequest', 'authenticated' => true],
++        'usuarios.v1.UserManagementService/UpdateUser' => ['client' => 'user_management_service', 'method' => 'UpdateUser', 'request' => 'App\\Grpc\\Usuarios\\V1\\UpdateUserRequest', 'authenticated' => true],
++        'usuarios.v1.UserManagementService/GetUser' => ['client' => 'user_management_service', 'method' => 'GetUser', 'request' => 'App\\Grpc\\Usuarios\\V1\\GetUserRequest', 'authenticated' => true],
++        'usuarios.v1.UserManagementService/SearchUsers' => ['client' => 'user_management_service', 'method' => 'SearchUsers', 'request' => 'App\\Grpc\\Usuarios\\V1\\SearchUsersRequest', 'authenticated' => true],
++        'usuarios.v1.UserManagementService/DisableUser' => ['client' => 'user_management_service', 'method' => 'DisableUser', 'request' => 'App\\Grpc\\Usuarios\\V1\\UserIdRequest', 'authenticated' => true],
++        'usuarios.v1.UserManagementService/ActivateUser' => ['client' => 'user_management_service', 'method' => 'ActivateUser', 'request' => 'App\\Grpc\\Usuarios\\V1\\UserIdRequest', 'authenticated' => true],
++        'usuarios.v1.UserManagementService/ListRoles' => ['client' => 'user_management_service', 'method' => 'ListRoles', 'request' => 'App\\Grpc\\Usuarios\\V1\\ListRolesRequest', 'authenticated' => true],
++        'usuarios.v1.AcademicStructureService/ListFacultades' => ['client' => 'academic_structure_service', 'method' => 'ListFacultades', 'request' => 'App\\Grpc\\Usuarios\\V1\\ListFacultadesRequest', 'authenticated' => true],
++        'usuarios.v1.AcademicStructureService/ListCarreras' => ['client' => 'academic_structure_service', 'method' => 'ListCarreras', 'request' => 'App\\Grpc\\Usuarios\\V1\\ListCarrerasRequest', 'authenticated' => true],
++        'usuarios.v1.HealthService/Health' => ['client' => 'health_service', 'method' => 'Health', 'request' => 'App\\Grpc\\Usuarios\\V1\\Empty', 'authenticated' => false],
++        'usuarios.v1.HealthService/Ready' => ['client' => 'health_service', 'method' => 'Ready', 'request' => 'App\\Grpc\\Usuarios\\V1\\Empty', 'authenticated' => false],
++        'usuarios.v1.HealthService/Live' => ['client' => 'health_service', 'method' => 'Live', 'request' => 'App\\Grpc\\Usuarios\\V1\\Empty', 'authenticated' => false],
++    ],
++    'actions' => [
++        'health' => ['title' => 'Salud de usuarios', 'rpc' => 'usuarios.v1.HealthService/Health', 'description' => 'Comprueba el estado general del microservicio.', 'payload' => [], 'capture' => [], 'authenticated' => false, 'types' => [], 'optional' => []],
++        'ready' => ['title' => 'Disponibilidad de usuarios', 'rpc' => 'usuarios.v1.HealthService/Ready', 'description' => 'Comprueba que sus dependencias están listas.', 'payload' => [], 'capture' => [], 'authenticated' => false, 'types' => [], 'optional' => []],
++        'live' => ['title' => 'Proceso activo de usuarios', 'rpc' => 'usuarios.v1.HealthService/Live', 'description' => 'Comprueba que el proceso continúa vivo.', 'payload' => [], 'capture' => [], 'authenticated' => false, 'types' => [], 'optional' => []],
++        'auth_health' => ['title' => 'Salud de autenticación', 'rpc' => 'auth.v1.HealthService/Health', 'description' => 'Comprueba el servicio de login usado por el operador.', 'payload' => [], 'capture' => [], 'authenticated' => false, 'types' => [], 'optional' => []],
++        'auth_ready' => ['title' => 'Disponibilidad de autenticación', 'rpc' => 'auth.v1.HealthService/Ready', 'description' => 'Comprueba que las dependencias de login estén listas.', 'payload' => [], 'capture' => [], 'authenticated' => false, 'types' => [], 'optional' => []],
++        'auth_live' => ['title' => 'Proceso de autenticación activo', 'rpc' => 'auth.v1.HealthService/Live', 'description' => 'Comprueba que el proceso de login continúe vivo.', 'payload' => [], 'capture' => [], 'authenticated' => false, 'types' => [], 'optional' => []],
++        'list_roles' => ['title' => 'Consultar roles activos', 'rpc' => 'usuarios.v1.UserManagementService/ListRoles', 'description' => 'Carga los roles que pueden asignarse al estudiante.', 'payload' => ['estado' => 'activo'], 'capture' => [], 'authenticated' => true, 'types' => [], 'optional' => []],
++        'list_faculties' => ['title' => 'Consultar facultades activas', 'rpc' => 'usuarios.v1.AcademicStructureService/ListFacultades', 'description' => 'Carga la estructura académica vigente.', 'payload' => ['estado' => 'activa'], 'capture' => [], 'authenticated' => true, 'types' => [], 'optional' => []],
++        'list_careers' => ['title' => 'Consultar carreras de FICA', 'rpc' => 'usuarios.v1.AcademicStructureService/ListCarreras', 'description' => 'Localiza la carrera de Software dentro de FICA.', 'payload' => ['facultad_codigo' => '{student_faculty}', 'estado' => 'activa'], 'capture' => [], 'authenticated' => true, 'types' => [], 'optional' => []],
++        'create_student' => ['title' => 'Crear estudiante', 'rpc' => 'usuarios.v1.UserManagementService/CreateUser', 'description' => 'Registra la identidad académica que usarán los siguientes flujos.', 'payload' => ['email' => '{student_email}', 'nombres' => 'Maria Fernanda', 'apellidos' => 'Castro Imbaquingo', 'identificacion' => '{student_document}', 'telefono' => '0994567890', 'rol_nombre' => 'estudiante', 'carrera_codigo' => '{student_career}', 'estado' => 'activo', 'temporary_password' => 'E1004567890'], 'capture' => ['student_id' => 'user.id'], 'authenticated' => true, 'types' => ['email' => 'email', 'temporary_password' => 'password'], 'optional' => []],
++        'get_by_email' => ['title' => 'Consultar por correo', 'rpc' => 'usuarios.v1.UserManagementService/GetUser', 'description' => 'Recupera la identidad por correo institucional.', 'payload' => ['email' => '{student_email}'], 'capture' => ['student_id' => 'user.id'], 'authenticated' => true, 'types' => ['email' => 'email'], 'optional' => []],
++        'get_by_document' => ['title' => 'Consultar por identificación', 'rpc' => 'usuarios.v1.UserManagementService/GetUser', 'description' => 'Recupera la identidad por documento académico.', 'payload' => ['identificacion' => '{student_document}'], 'capture' => ['student_id' => 'user.id'], 'authenticated' => true, 'types' => [], 'optional' => []],
++        'search_career' => ['title' => 'Buscar activos por carrera', 'rpc' => 'usuarios.v1.UserManagementService/SearchUsers', 'description' => 'Revisa estudiantes activos de la carrera de Software.', 'payload' => ['carrera_codigo' => '{student_career}', 'estado' => 'activo', 'limit' => 10, 'offset' => 0], 'capture' => [], 'authenticated' => true, 'types' => ['limit' => 'integer', 'offset' => 'integer'], 'optional' => []],
++        'search_faculty' => ['title' => 'Buscar por facultad', 'rpc' => 'usuarios.v1.UserManagementService/SearchUsers', 'description' => 'Genera la consulta administrativa por facultad.', 'payload' => ['facultad_codigo' => '{student_faculty}', 'limit' => 10, 'offset' => 0], 'capture' => [], 'authenticated' => true, 'types' => ['limit' => 'integer', 'offset' => 'integer'], 'optional' => []],
++        'search_text' => ['title' => 'Buscar por texto libre', 'rpc' => 'usuarios.v1.UserManagementService/SearchUsers', 'description' => 'Busca por nombre, apellido, correo o identificación.', 'payload' => ['query' => 'Castro', 'limit' => 10, 'offset' => 0], 'capture' => [], 'authenticated' => true, 'types' => ['limit' => 'integer', 'offset' => 'integer'], 'optional' => []],
++        'update_contact' => ['title' => 'Actualizar contacto', 'rpc' => 'usuarios.v1.UserManagementService/UpdateUser', 'description' => 'Actualiza el teléfono antes de la matrícula.', 'payload' => ['id' => '{student_id}', 'telefono' => '0987654321', 'nombres' => 'Maria Fernanda', 'apellidos' => 'Castro Imbaquingo'], 'capture' => [], 'authenticated' => true, 'types' => [], 'optional' => []],
++        'block_student' => ['title' => 'Bloquear por revisión', 'rpc' => 'usuarios.v1.UserManagementService/UpdateUser', 'description' => 'Aplica el estado bloqueado durante una revisión administrativa.', 'payload' => ['id' => '{student_id}', 'estado' => 'bloqueado'], 'capture' => [], 'authenticated' => true, 'types' => [], 'optional' => []],
++        'disable_student' => ['title' => 'Aplicar baja lógica', 'rpc' => 'usuarios.v1.UserManagementService/DisableUser', 'description' => 'Desactiva al estudiante sin borrar su historial.', 'payload' => ['id' => '{student_id}'], 'capture' => [], 'authenticated' => true, 'types' => [], 'optional' => []],
++        'verify_inactive' => ['title' => 'Verificar estado inactivo', 'rpc' => 'usuarios.v1.UserManagementService/SearchUsers', 'description' => 'Confirma que la baja aparece en las consultas.', 'payload' => ['estado' => 'inactivo', 'query' => '{student_document}', 'limit' => 10, 'offset' => 0], 'capture' => [], 'authenticated' => true, 'types' => ['limit' => 'integer', 'offset' => 'integer'], 'optional' => []],
++        'activate_student' => ['title' => 'Reactivar estudiante', 'rpc' => 'usuarios.v1.UserManagementService/ActivateUser', 'description' => 'Habilita nuevamente la cuenta para matricular.', 'payload' => ['id' => '{student_id}'], 'capture' => [], 'authenticated' => true, 'types' => [], 'optional' => []],
++        'verify_active' => ['title' => 'Verificar estado final', 'rpc' => 'usuarios.v1.UserManagementService/GetUser', 'description' => 'Confirma que la identidad final quedó activa.', 'payload' => ['id' => '{student_id}'], 'capture' => ['student_id' => 'user.id'], 'authenticated' => true, 'types' => [], 'optional' => []],
++        'seed_user' => ['title' => 'Consultar usuario semilla', 'rpc' => 'usuarios.v1.UserManagementService/GetUser', 'description' => 'Permite validar cualquier identidad semilla por correo.', 'payload' => ['email' => 'allunav@utn.edu.ec'], 'capture' => [], 'authenticated' => true, 'types' => ['email' => 'email'], 'optional' => []],
++        'negative_no_login' => ['title' => 'Prueba: roles sin sesión remota', 'rpc' => 'usuarios.v1.UserManagementService/ListRoles', 'description' => 'Debe responder Unauthenticated al omitir el bearer token.', 'payload' => [], 'capture' => [], 'authenticated' => false, 'types' => [], 'optional' => []],
++        'negative_missing' => ['title' => 'Prueba: usuario inexistente', 'rpc' => 'usuarios.v1.UserManagementService/GetUser', 'description' => 'Debe responder NotFound.', 'payload' => ['email' => 'usuario.inexistente@utn.edu.ec'], 'capture' => [], 'authenticated' => true, 'types' => ['email' => 'email'], 'optional' => []],
++    ],
+ ];
