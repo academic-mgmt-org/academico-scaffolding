@@ -353,6 +353,7 @@ que ya esté aplicado y comprueba los demás antes de modificar el proyecto.
     "$PATCH_DIR/0003-tests-and-analysis.patch"
     "$PATCH_DIR/0004-disable-test-timeout.patch"
     "$PATCH_DIR/0005-academic-gateway-interfaces.patch"
+    "$PATCH_DIR/0006-deterministic-tailwind-source.patch"
   )
 
   for PATCH_FILE in "${PATCHES[@]}"; do
@@ -389,10 +390,12 @@ los archivos generados por Laravel permanecen con LF. `.gitattributes` también
 conserva los parches con LF en clones nuevos.
 
 Los parches se separan por responsabilidad: cliente gRPC, integración con
-Fortify, pruebas/análisis estático e interfaces de los flujos académicos. El
-quinto parche completa automáticamente los controladores, middleware,
-configuración, vistas y pruebas creados en la sección 3. No incluyen `.env`,
-credenciales, tokens, los `.proto` ni las clases generadas de `app/Grpc`.
+Fortify, pruebas/análisis estático, interfaces de los flujos académicos y
+compilación determinista de Tailwind. El quinto parche completa automáticamente
+los controladores, middleware, configuración, vistas y pruebas creados en la
+sección 3; el sexto desactiva la detección implícita de la raíz Git y conserva
+solo las fuentes CSS declaradas. No incluyen `.env`, credenciales, tokens, los
+`.proto` ni las clases generadas de `app/Grpc`.
 
 ### 6. Preparar la imagen de PHP con gRPC
 
@@ -939,7 +942,7 @@ composer dump-autoload --ignore-platform-req=ext-grpc
 ### 5. Aplicar la implementación generada y verificada
 
 Ejecutar el bloque de la sección
-“Aplicar automáticamente la implementación funcional”. Los cinco archivos
+“Aplicar automáticamente la implementación funcional”. Los seis archivos
 utilizados están en `/home/opc/login-scaffolding/patches` y se aplican con
 `git apply`; no requieren edición manual. Si el proyecto de auditoría está en
 otra ubicación, definir `PATCH_DIR` con esa ruta antes de ejecutar el bloque.

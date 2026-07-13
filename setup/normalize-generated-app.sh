@@ -47,6 +47,7 @@ for file in \
     chisel.php \
     composer.json \
     composer.lock \
+    compose.yaml \
     package.json \
     package-lock.json \
     phpstan-bootstrap.php \
