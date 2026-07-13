@@ -1,8 +1,9 @@
-# Login Scaffolding
+# Sistema académico desde scaffolding
 
-Ejemplo reproducible de autenticación Laravel contra un gateway gRPC. La
-interfaz proviene del Starter Kit oficial de Livewire; el objetivo de este
-repositorio es demostrar el flujo funcional, no proponer un diseño visual.
+Aplicación Laravel reproducible contra un gateway gRPC. La base proviene del
+Starter Kit oficial de Livewire y todas las interfaces adicionales nacen de
+generadores de Artisan. Los parches de `patches/` completan automáticamente
+los stubs; ningún paso de la ruta principal requiere editar archivos a mano.
 
 El proyecto ejecuta, en este orden:
 
@@ -12,6 +13,13 @@ El proyecto ejecuta, en este orden:
    recientes, siempre con `authorization: Bearer <JWT>`.
 4. `auth.v1.AuthService/Logout` con access token y refresh token.
 5. Las pruebas negativas sin login y con el token revocado.
+6. Alta y regularización de estudiantes mediante `usuarios.v1.*`.
+7. Inscripción, ajuste y cancelación mediante `matriculas.v1.*`.
+8. Registro, corrección y publicación de notas mediante
+   `calificaciones.v1.*`.
+9. Creación, revisión documental y resolución de becas mediante
+   `solicitudes.v1.*`.
+10. Recuperación de contraseña mediante `ForgotPassword` y `ResetPassword`.
 
 El gateway configurado por defecto se muestra a continuación. Este bloque es
 solo informativo; **no se copia ni se ejecuta**:
@@ -36,7 +44,7 @@ terminal. Los comentarios comienzan con `#`, por lo que Bash los ignora.
 - Esperar siempre a que el bloque termine y vuelva a aparecer el prompt antes
   de continuar, excepto cuando se indique que el proceso queda ejecutándose.
 
-## Crear el login desde cero con plantillas predefinidas
+## Crear la aplicación desde cero con plantillas predefinidas
 
 Esta es la ruta principal solicitada. Comienza en un directorio que todavía no
 contiene un proyecto Laravel y utiliza el Starter Kit oficial de Livewire. No
@@ -153,22 +161,37 @@ php artisan make:interface Contracts/GatewayClient --no-interaction
 php artisan make:class Services/GrpcGatewayClient --no-interaction
 php artisan make:exception GatewayRpcException --no-interaction
 php artisan make:controller NotificationController --invokable --no-interaction
+php artisan make:controller GatewayDashboardController --no-interaction
+php artisan make:controller GatewayFlowController --no-interaction
+php artisan make:controller GatewayPasswordController --no-interaction
 php artisan make:middleware RevokeGatewaySessionOnLogout --no-interaction
+php artisan make:middleware EnsureGatewaySession --no-interaction
 php artisan make:command GatewaySmokeCommand --no-interaction
 php artisan make:config gateway --no-interaction
+php artisan make:config gateway-flows --no-interaction
 php artisan make:view notifications.index --no-interaction
+php artisan make:view dashboard.index --no-interaction
+php artisan make:view flows.show --no-interaction
 php artisan make:test GatewayAuthenticationTest --no-interaction
+php artisan make:test GatewayFlowsTest --no-interaction
+php artisan make:test GatewayPasswordRecoveryTest --no-interaction
 
 # make:view inserta una cita aleatoria; normalizarla para que el parche sea reproducible.
-sed -i '/<!-- .* -->/c\    <!-- Normalized Laravel view stub. -->' \
-  resources/views/notifications/index.blade.php
+for VIEW in \
+  resources/views/notifications/index.blade.php \
+  resources/views/dashboard/index.blade.php \
+  resources/views/flows/show.blade.php; do
+  sed -i '/<!-- .* -->/c\    <!-- Normalized Laravel view stub. -->' "$VIEW"
+done
 # ===== FIN DEL BLOQUE =====
 ```
 
-Todos esos archivos nacen de stubs mantenidos por Laravel. La implementación de
-este repositorio completa los stubs para delegar el login de Fortify al gateway,
-guardar los tokens en la sesión del servidor, consultar notificaciones y
-revocar la sesión en logout.
+Todos esos archivos nacen de stubs mantenidos por Laravel. La implementación
+completa los stubs para delegar el login de Fortify al gateway, guardar los
+tokens en la sesión del servidor, consultar notificaciones y ejecutar desde la
+interfaz cada bloque de `FLUJO_GATEWAY`. Las respuestas encadenan en la sesión
+los identificadores de estudiante, matrícula, materia, componentes, notas y
+solicitudes; los tokens nunca se envían al navegador.
 
 La omisión de `ext-grpc` solo permite completar el scaffolding con el PHP del
 anfitrión. La imagen se valida más adelante y no ejecuta la aplicación si la
@@ -176,8 +199,12 @@ extensión no quedó cargada.
 
 ### 4. Generar contratos y clientes gRPC
 
-Los `.proto` tampoco se redactan a mano: se exportan desde la reflexión del
-gateway y luego `protoc` genera las clases PHP.
+Los `.proto` tampoco se redactan a mano. Auth y Notificaciones se exportan
+desde la reflexión del gateway. Como el despliegue verificado todavía no
+publica los contratos funcionales de los otros cuatro dominios, sus fuentes
+canónicas se obtienen automáticamente con Git desde los repositorios de cada
+core asset, incluidos los repositorios privados accesibles para el operador.
+Finalmente `protoc` genera todas las clases y clientes PHP.
 
 ```bash
 # ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
@@ -193,10 +220,35 @@ grpcurl -plaintext \
   academia-dev.eastus2.cloudapp.azure.com:50050 \
   describe notificaciones.v1.NotificationService
 
+PROTO_SOURCES="$(mktemp -d)"
+cleanup_proto_sources() { rm -rf "$PROTO_SOURCES"; }
+trap cleanup_proto_sources EXIT
+
+git clone --depth=1 https://github.com/academic-mgmt-org/academico-usuarios.git "$PROTO_SOURCES/usuarios"
+git clone --depth=1 https://github.com/academic-mgmt-org/academico-matriculas.git "$PROTO_SOURCES/matriculas"
+git clone --depth=1 https://github.com/academic-mgmt-org/academico-calificaciones.git "$PROTO_SOURCES/calificaciones"
+git clone --depth=1 https://github.com/academic-mgmt-org/academico-solicitudes.git "$PROTO_SOURCES/solicitudes"
+
+cp "$PROTO_SOURCES/usuarios/proto/usuarios/v1/usuarios.proto" proto/usuarios_v1.proto
+cp "$PROTO_SOURCES/matriculas/proto/matriculas/v1/matriculas.proto" proto/matriculas_v1.proto
+cp "$PROTO_SOURCES/calificaciones/proto/calificaciones/v1/calificaciones.proto" proto/calificaciones_v1.proto
+cp "$PROTO_SOURCES/solicitudes/proto/solicitudes/v1/solicitudes.proto" proto/solicitudes_v1.proto
+
+cleanup_proto_sources
+trap - EXIT
+
 sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\AuthV1";' proto/auth_v1.proto
 sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Auth\\\\V1";' proto/auth_v1.proto
 sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\NotificacionesV1";' proto/notificaciones_v1.proto
 sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Notificaciones\\\\V1";' proto/notificaciones_v1.proto
+sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\UsuariosV1";' proto/usuarios_v1.proto
+sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Usuarios\\\\V1";' proto/usuarios_v1.proto
+sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\MatriculasV1";' proto/matriculas_v1.proto
+sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Matriculas\\\\V1";' proto/matriculas_v1.proto
+sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\CalificacionesV1";' proto/calificaciones_v1.proto
+sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Calificaciones\\\\V1";' proto/calificaciones_v1.proto
+sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\SolicitudesV1";' proto/solicitudes_v1.proto
+sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Solicitudes\\\\V1";' proto/solicitudes_v1.proto
 
 WORKSPACE_PATH="$PWD"
 case "$(uname -s)" in
@@ -218,7 +270,12 @@ MSYS_NO_PATHCONV=1 docker run --rm \
       --php_out=/tmp/generated \
       --grpc_out=/tmp/generated \
       --plugin=protoc-gen-grpc=/usr/bin/grpc_php_plugin \
-      proto/auth_v1.proto proto/notificaciones_v1.proto &&
+      proto/auth_v1.proto \
+      proto/notificaciones_v1.proto \
+      proto/usuarios_v1.proto \
+      proto/matriculas_v1.proto \
+      proto/calificaciones_v1.proto \
+      proto/solicitudes_v1.proto &&
     cp -R /tmp/generated/App/Grpc app/ &&
     chown -R "$HOST_UID:$HOST_GID" app/Grpc
   '
@@ -257,6 +314,7 @@ que ya esté aplicado y comprueba los demás antes de modificar el proyecto.
     "$PATCH_DIR/0002-fortify-login-flow.patch"
     "$PATCH_DIR/0003-tests-and-analysis.patch"
     "$PATCH_DIR/0004-disable-test-timeout.patch"
+    "$PATCH_DIR/0005-academic-gateway-interfaces.patch"
   )
 
   for PATCH_FILE in "${PATCHES[@]}"; do
@@ -292,8 +350,10 @@ los archivos generados por Laravel permanecen con LF. `.gitattributes` también
 conserva los parches con LF en clones nuevos.
 
 Los parches se separan por responsabilidad: cliente gRPC, integración con
-Fortify y pruebas/análisis estático. No incluyen `.env`, credenciales, tokens,
-los `.proto` ni las clases generadas de `app/Grpc`.
+Fortify, pruebas/análisis estático e interfaces de los flujos académicos. El
+quinto parche completa automáticamente los controladores, middleware,
+configuración, vistas y pruebas creados en la sección 3. No incluyen `.env`,
+credenciales, tokens, los `.proto` ni las clases generadas de `app/Grpc`.
 
 ### 6. Preparar la imagen de PHP con gRPC
 
@@ -461,7 +521,7 @@ repositorio de PHP.
 | --- | --- |
 | Aplicación, login, rutas, Fortify, Livewire y estilos | `laravel new --livewire` |
 | Cliente, contrato, excepción, controlador, middleware, comando, vista, configuración y prueba | `php artisan make:*` |
-| Contratos `.proto` | reflexión del gateway con `grpcurl -proto-out-dir` |
+| Contratos `.proto` | reflexión con `grpcurl` para servicios publicados y `git clone` de los repositorios canónicos para contratos aún no publicados |
 | Clases y clientes PHP gRPC | `protoc` + `grpc_php_plugin` |
 | Implementación funcional sobre los stubs | parches reproducibles con `git apply` |
 | Imagen PHP con la extensión gRPC | base Sail preconstruida fijada por digest + capa binaria `php8.5-grpc`; como alternativa, Sail + `PHP_EXTENSIONS=grpc` |
@@ -528,11 +588,26 @@ Si el gateway responde correctamente:
   servidor.
 - Los tokens no se escriben en HTML, JavaScript, `localStorage` ni logs.
 
+### Panel y flujos académicos
+
+`GET /dashboard` presenta los cuatro recorridos de negocio. Cada acción usa un
+catálogo cerrado de RPCs y un formulario generado desde `config/gateway-flows.php`.
+Cuando una respuesta contiene un identificador funcional, el controlador lo
+guarda en la sesión cifrada y lo precarga en el siguiente bloque. Así puede
+ejecutarse desde el navegador la cadena `Usuarios -> Matrículas ->
+Calificaciones`, además del expediente independiente de Solicitudes.
+
+Si el gateway aún no publica un contrato, la interfaz conserva el contexto y
+muestra el código gRPC recibido —por ejemplo, `12 Unimplemented`— para
+distinguir esa condición de un error de formulario. El cliente web nunca envía
+API keys; el gateway continúa siendo responsable de inyectarlas.
+
 ### Notificaciones
 
-`GET /dashboard` exige el middleware `auth`. El controlador obtiene el access
-token de la sesión y llama al mismo host gRPC. El siguiente bloque representa
-el flujo; es solo informativo y **no se copia ni se ejecuta**:
+`GET /notificaciones` exige una sesión local y una sesión gateway válidas. El
+controlador obtiene el access token de la sesión y llama al mismo host gRPC. El
+siguiente bloque representa el flujo; es solo informativo y **no se copia ni
+se ejecuta**:
 
 ```text
 CountUnread -> ListNotifications(estado=no_leido, limit=unreadCount)
@@ -541,6 +616,13 @@ CountUnread -> ListNotifications(estado=no_leido, limit=unreadCount)
 
 El cliente envía `authorization: Bearer <JWT>` y no envía `x-api-key`; esa clave
 la agrega el gateway al reenviar la petición.
+
+### Contraseña olvidada
+
+`GET /forgot-password` solicita el enlace con `AuthService/ForgotPassword`.
+El enlace más reciente abre `GET /reset-password?token=...&email=...` y el
+formulario envía la nueva clave directamente a `AuthService/ResetPassword` con
+`passwordEncoding=plain`. No interviene el broker local de contraseñas.
 
 ### Logout
 
@@ -604,8 +686,9 @@ cd login-scaffolding
 Laravel 13 ya no utiliza Breeze como Starter Kit principal. Livewire genera el
 login Blade, Fortify, rutas, validaciones, rate limiting, middleware, estilos,
 migraciones y pruebas base. En este proyecto se deshabilitaron registro,
-recuperación, passkeys y 2FA locales porque el gateway externo es la fuente de
-autenticación.
+recuperación mediante el broker local, passkeys y 2FA porque el gateway externo
+es la fuente de autenticación; el quinto parche agrega la recuperación remota
+con los RPCs de Auth.
 
 ### 2. Dependencias y clases desde plantillas
 
@@ -618,15 +701,28 @@ php artisan make:interface Contracts/GatewayClient
 php artisan make:class Services/GrpcGatewayClient
 php artisan make:exception GatewayRpcException
 php artisan make:controller NotificationController --invokable
+php artisan make:controller GatewayDashboardController
+php artisan make:controller GatewayFlowController
+php artisan make:controller GatewayPasswordController
 php artisan make:middleware RevokeGatewaySessionOnLogout
+php artisan make:middleware EnsureGatewaySession
 php artisan make:command GatewaySmokeCommand
 php artisan make:config gateway
+php artisan make:config gateway-flows
 php artisan make:view notifications.index
+php artisan make:view dashboard.index
+php artisan make:view flows.show
 php artisan make:test GatewayAuthenticationTest
+php artisan make:test GatewayFlowsTest
+php artisan make:test GatewayPasswordRecoveryTest
 
 # make:view inserta una cita aleatoria; normalizarla para que el parche sea reproducible.
-sed -i "/<!-- .* -->/c\\    <!-- Normalized Laravel view stub. -->" \
-  resources/views/notifications/index.blade.php
+for VIEW in \
+  resources/views/notifications/index.blade.php \
+  resources/views/dashboard/index.blade.php \
+  resources/views/flows/show.blade.php; do
+  sed -i "/<!-- .* -->/c\\    <!-- Normalized Laravel view stub. -->" "$VIEW"
+done
 # ===== FIN DEL BLOQUE =====
 ```
 
@@ -648,12 +744,26 @@ grpcurl -plaintext \
   -proto-out-dir proto \
   academia-dev.eastus2.cloudapp.azure.com:50050 \
   describe notificaciones.v1.NotificationService
+
+PROTO_SOURCES="$(mktemp -d)"
+trap 'rm -rf "$PROTO_SOURCES"' EXIT
+git clone --depth=1 https://github.com/academic-mgmt-org/academico-usuarios.git "$PROTO_SOURCES/usuarios"
+git clone --depth=1 https://github.com/academic-mgmt-org/academico-matriculas.git "$PROTO_SOURCES/matriculas"
+git clone --depth=1 https://github.com/academic-mgmt-org/academico-calificaciones.git "$PROTO_SOURCES/calificaciones"
+git clone --depth=1 https://github.com/academic-mgmt-org/academico-solicitudes.git "$PROTO_SOURCES/solicitudes"
+cp "$PROTO_SOURCES/usuarios/proto/usuarios/v1/usuarios.proto" proto/usuarios_v1.proto
+cp "$PROTO_SOURCES/matriculas/proto/matriculas/v1/matriculas.proto" proto/matriculas_v1.proto
+cp "$PROTO_SOURCES/calificaciones/proto/calificaciones/v1/calificaciones.proto" proto/calificaciones_v1.proto
+cp "$PROTO_SOURCES/solicitudes/proto/solicitudes/v1/solicitudes.proto" proto/solicitudes_v1.proto
+rm -rf "$PROTO_SOURCES"
+trap - EXIT
 # ===== FIN DEL BLOQUE =====
 ```
 
-`grpcurl` exporta `auth_v1.proto` y `notificaciones_v1.proto`. Antes de ejecutar
-`protoc`, se agregan por comando los namespaces PHP para que las clases queden
-dentro del autoload `App\\` de la plantilla Laravel:
+`grpcurl` exporta los dos contratos publicados y Git obtiene los cuatro
+contratos canónicos restantes. Antes de ejecutar `protoc`, se agregan por
+comando los namespaces PHP para que las clases queden dentro del autoload
+`App\\` de la plantilla Laravel:
 
 ```bash
 # ===== INICIO: COPIAR Y EJECUTAR TODO ESTE BLOQUE =====
@@ -661,6 +771,14 @@ sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\AuthV1
 sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Auth\\\\V1";' proto/auth_v1.proto
 sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\NotificacionesV1";' proto/notificaciones_v1.proto
 sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Notificaciones\\\\V1";' proto/notificaciones_v1.proto
+sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\UsuariosV1";' proto/usuarios_v1.proto
+sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Usuarios\\\\V1";' proto/usuarios_v1.proto
+sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\MatriculasV1";' proto/matriculas_v1.proto
+sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Matriculas\\\\V1";' proto/matriculas_v1.proto
+sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\CalificacionesV1";' proto/calificaciones_v1.proto
+sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Calificaciones\\\\V1";' proto/calificaciones_v1.proto
+sed -i '4i\option php_metadata_namespace = "App\\\\Grpc\\\\GPBMetadata\\\\SolicitudesV1";' proto/solicitudes_v1.proto
+sed -i '4i\option php_namespace = "App\\\\Grpc\\\\Solicitudes\\\\V1";' proto/solicitudes_v1.proto
 # ===== FIN DEL BLOQUE =====
 ```
 
@@ -692,7 +810,12 @@ MSYS_NO_PATHCONV=1 docker run --rm \
       --php_out=/tmp/generated \
       --grpc_out=/tmp/generated \
       --plugin=protoc-gen-grpc=/usr/bin/grpc_php_plugin \
-      proto/auth_v1.proto proto/notificaciones_v1.proto &&
+      proto/auth_v1.proto \
+      proto/notificaciones_v1.proto \
+      proto/usuarios_v1.proto \
+      proto/matriculas_v1.proto \
+      proto/calificaciones_v1.proto \
+      proto/solicitudes_v1.proto &&
     cp -R /tmp/generated/App/Grpc app/ &&
     chown -R "$HOST_UID:$HOST_GID" app/Grpc
   '
@@ -704,7 +827,7 @@ composer dump-autoload --ignore-platform-req=ext-grpc
 ### 5. Aplicar la implementación generada y verificada
 
 Ejecutar el bloque de la sección
-“Aplicar automáticamente la implementación funcional”. Los cuatro archivos
+“Aplicar automáticamente la implementación funcional”. Los cinco archivos
 utilizados están en `/home/opc/login-scaffolding/patches` y se aplican con
 `git apply`; no requieren edición manual. Si el proyecto de auditoría está en
 otra ubicación, definir `PATCH_DIR` con esa ruta antes de ejecutar el bloque.
@@ -732,10 +855,10 @@ docker compose exec -T laravel.test php --ri grpc
 gh repo create academic-mgmt-org/login-scaffolding \
   --private \
   --add-readme \
-  --description "Scaffolding de login Laravel integrado con un gateway gRPC"
+  --description "Sistema académico Laravel generado desde plantillas y conectado al gateway gRPC"
 
 git add .
-git commit -m "feat: add template-generated Laravel gRPC login flow"
+git commit -m "feat: add template-generated academic gateway flows"
 git push -u origin main
 # ===== FIN DEL BLOQUE DE PUBLICACIÓN OPCIONAL =====
 ```
@@ -759,6 +882,13 @@ git push -u origin main
   SQLite del lado servidor.
 - No se confirma ninguna contraseña, token o API key.
 - El navegador nunca llama directamente a los microservicios internos.
+- El cliente implementa explícitamente los 63 RPCs documentados y el ejecutor
+  genérico usa un catálogo cerrado; el nombre del servicio nunca se toma
+  directamente del request HTTP.
+- Las API keys permanecen en el gateway. Los formularios solo envían datos de
+  dominio y, para Usuarios y Notificaciones, el bearer token de la sesión.
+- Contraseñas y tokens se eliminan de la representación del payload guardada
+  como último resultado del flujo.
 - El logout remoto se intenta antes de invalidar la sesión local.
 - El rate limiter generado por Fortify conserva cinco intentos por minuto para
   cada combinación de usuario e IP.
