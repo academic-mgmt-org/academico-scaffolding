@@ -52,7 +52,7 @@ diff --git a/app/Http/Controllers/AcademicInterfaceController.php b/app/Http/Con
 index 0badea4..10e5664 100644
 --- a/app/Http/Controllers/AcademicInterfaceController.php
 +++ b/app/Http/Controllers/AcademicInterfaceController.php
-@@ -2,9 +2,276 @@
+@@ -2,9 +2,281 @@
  
  namespace App\Http\Controllers;
  
@@ -148,6 +148,11 @@ index 0badea4..10e5664 100644
 +        $accessToken = $authenticated
 +            ? (string) $request->session()->get((string) config('academic-interface.session.access_token'), '')
 +            : '';
++        $accessTokenField = $step['access_token_field'] ?? null;
++
++        if (is_string($accessTokenField) && $accessTokenField !== '') {
++            $payload[$accessTokenField] = $accessToken;
++        }
 +
 +        try {
 +            $result = $this->gateway->invoke((string) $step['rpc'], $payload, $accessToken);
@@ -1208,7 +1213,7 @@ diff --git a/tests/Feature/AcademicInterfaceTest.php b/tests/Feature/AcademicInt
 index 6380e9a..ce91d52 100644
 --- a/tests/Feature/AcademicInterfaceTest.php
 +++ b/tests/Feature/AcademicInterfaceTest.php
-@@ -2,19 +2,204 @@
+@@ -2,19 +2,210 @@
  
  namespace Tests\Feature;
  
@@ -1268,16 +1273,22 @@ index 6380e9a..ce91d52 100644
 +        }
 +    }
 +
-+    public function test_an_allow_listed_action_is_executed_and_its_result_is_captured(): void
++    public function test_an_allow_listed_action_injects_the_access_token_and_captures_its_result(): void
 +    {
 +        $this->configureExampleModule();
++        config()->set('academic-module.actions.count_unread.access_token_field', 'token');
 +        $this->fakeGateway(function (string $rpc, array $payload, string $token): array {
 +            $this->assertSame('notificaciones.v1.NotificationService/CountUnread', $rpc);
-+            $this->assertSame(['usuario_id' => 'user-42'], $payload);
++            $this->assertSame(['usuario_id' => 'user-42', 'token' => 'access-token'], $payload);
 +            $this->assertSame('access-token', $token);
 +
 +            return ['unreadCount' => 7];
 +        });
++
++        $this->withGatewaySession()
++            ->get(route('academic.interface'))
++            ->assertOk()
++            ->assertDontSee('access-token');
 +
 +        $this->withGatewaySession()
 +            ->post(route('academic.interface.execute', 'count_unread'), [

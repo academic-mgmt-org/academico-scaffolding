@@ -35,6 +35,13 @@ if ! grep -Fq \
     exit 1
 fi
 
+login_action="$(grep -F "'validate_session' =>" "$ROOT/patches/0100-academico-login.patch")"
+if [[ "$login_action" != *"'rpc' => 'auth.v1.AuthService/ValidateToken'"* \
+    || "$login_action" != *"'access_token_field' => 'token'"* ]]; then
+    printf 'ERROR: la validación de sesión debe usar ValidateToken con el token de la sesión.\n' >&2
+    exit 1
+fi
+
 for legacy_path in \
     package.json \
     package-lock.json \
